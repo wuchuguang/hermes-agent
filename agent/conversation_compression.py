@@ -183,7 +183,7 @@ ROUTINE_COMPRESSION_STATUS_SAMPLES = (
 )
 
 
-def _builtin_memory_prompt_snapshot(agent: Any) -> Optional[Tuple[str, str]]:
+def _builtin_memory_prompt_snapshot(agent: Any) -> Optional[Tuple[str, str, str]]:
     """Return the built-in memory text that can affect a system prompt.
 
     ``MemoryStore`` freezes this text until ``load_from_disk()``.  Rendering
@@ -191,10 +191,13 @@ def _builtin_memory_prompt_snapshot(agent: Any) -> Optional[Tuple[str, str]]:
     cached system prompt when it already embeds the current memory (see
     :func:`_cached_prompt_reflects_builtin_memory`).  An unreadable snapshot
     returns ``None`` so callers take the conservative rebuild path.
+
+    Returns ``(memory, user, project)`` — the project block (fork feature)
+    participates in the same retention check as the global stores.
     """
     store = getattr(agent, "_memory_store", None)
     if store is None:
-        return "", ""
+        return "", "", ""
     try:
         memory = (
             store.format_for_system_prompt("memory") or ""
@@ -206,9 +209,10 @@ def _builtin_memory_prompt_snapshot(agent: Any) -> Optional[Tuple[str, str]]:
             if getattr(agent, "_user_profile_enabled", False)
             else ""
         )
+        project = store.format_for_system_prompt("project") or ""
     except Exception:
         return None
-    return memory, user
+    return memory, user, project
 
 
 def _cached_prompt_reflects_builtin_memory(agent: Any, cached_prompt: str) -> bool:
@@ -233,7 +237,7 @@ def _cached_prompt_reflects_builtin_memory(agent: Any, cached_prompt: str) -> bo
         from tools.memory_tool import MEMORY_BLOCK_HEADERS
     except Exception:
         return False
-    for target, block in zip(("memory", "user"), snapshot):
+    for target, block in zip(("memory", "user", "project"), snapshot):
         block = block.strip()
         if block:
             # build_system_prompt_parts embeds the stripped block verbatim;

@@ -752,6 +752,16 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             user_block = agent._memory_store.format_for_system_prompt("user")
             if user_block:
                 volatile_parts.append(user_block)
+        # Project memory (fork): injected whenever the session resolved a
+        # project root and the store holds entries. Same frozen-snapshot
+        # lifecycle as the global blocks — see MemoryStore.load_from_disk.
+        if agent._memory_enabled or agent._user_profile_enabled:
+            try:
+                proj_block = agent._memory_store.format_for_system_prompt("project")
+                if proj_block:
+                    volatile_parts.append(proj_block)
+            except Exception:
+                pass
 
     # External memory provider system prompt block (additive to built-in)
     if agent._memory_manager:

@@ -188,7 +188,11 @@ MEMORY_GUIDANCE = (
     "'Project uses pytest with xdist' ✓ — 'Run tests with pytest -n 4' ✗. "
     "Imperative phrasing gets re-read as a directive in later sessions and can "
     "cause repeated work or override the user's current request. Procedures and "
-    "workflows belong in skills, not memory."
+    "workflows belong in skills, not memory.\n"
+    "Project-scoped facts (build commands, machine-specific paths, project "
+    "credentials, repo quirks) belong in target='project', not the global "
+    "'memory' store — the project store is only loaded in sessions inside that "
+    "repo, so it keeps the global budget free for cross-project facts."
 )
 
 SESSION_SEARCH_GUIDANCE = (

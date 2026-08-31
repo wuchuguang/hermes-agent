@@ -23,8 +23,10 @@ Design:
 - Frozen snapshot pattern: system prompt is stable, tool responses show live state
 """
 
+import hashlib
 import json
 import logging
+import re
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -62,9 +64,77 @@ def get_memory_dir() -> Path:
 MEMORY_BLOCK_HEADERS = {
     "memory": "MEMORY (your personal notes)",
     "user": "USER PROFILE (who the user is)",
+    "project": "PROJECT MEMORY",
 }
 
 ENTRY_DELIMITER = "\n§\n"
+
+
+# ---------------------------------------------------------------------------
+# Per-project memory store (fork feature, wcg).
+#
+# Project facts used to crowd the global MEMORY.md (which is char-capped and
+# injected into EVERY session regardless of which repo is open). The 'project'
+# target keeps them in a separate file keyed by the session's git root, loaded
+# only when the agent actually works inside that project:
+#
+#   ~/.hermes/memories/projects/<sha1-8>-<tail>.md
+#
+# Same §-entry format, same drift/dedup/threat-scan pipeline, same frozen
+# snapshot lifecycle as the global stores — only the file path and the char
+# budget differ. AGENTS.md remains the channel for human-authored, committable
+# project conventions; this store is for agent-learned facts that don't belong
+# in git (credentials, one-off build workarounds, machine-specific paths).
+# ---------------------------------------------------------------------------
+
+DEFAULT_PROJECT_CHAR_LIMIT = 2000
+
+
+def _project_slug(project_root: Path) -> str:
+    """Deterministic filesystem-safe slug for a project root.
+
+    ``<8-hex of sha1(root)>-<sanitized trailing segment>`` — the hash makes
+    collisions between same-named projects impossible, the readable tail keeps
+    the file recognizable when browsing ``memories/projects/`` by hand.
+    """
+    digest = hashlib.sha1(str(project_root).encode("utf-8")).hexdigest()[:8]
+    tail = project_root.name.strip().lower()
+    tail = re.sub(r"[^a-z0-9._-]+", "-", tail).strip("-.") or "project"
+    return f"{digest}-{tail[:32]}"
+
+
+def _project_root_for_session() -> Optional[Path]:
+    """Resolve the project root for the current session, or None.
+
+    Walks up from the agent's logical working directory (session override →
+    TERMINAL_CWD → os.getcwd(), same resolution as context-file loading) to
+    the nearest containing ``.git`` directory. Returns None outside any repo
+    — sessions not tied to a project simply have no project store.
+    """
+    try:
+        from agent.runtime_cwd import resolve_agent_cwd
+
+        start = resolve_agent_cwd()
+    except Exception:
+        start = Path.cwd()
+    try:
+        start = start.resolve()
+    except Exception:
+        pass
+    if not start.is_dir():
+        return None
+    # Never resolve a project store for the Hermes install tree itself.
+    try:
+        from agent.runtime_cwd import _is_install_tree
+
+        if _is_install_tree(start):
+            return None
+    except Exception:
+        pass
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +232,21 @@ class MemoryStore:
     # turn to budget exhaustion and suppress the user's reply (issue #42405).
     _MAX_CONSOLIDATION_FAILURES_PER_TURN = 3
 
-    def __init__(self, memory_char_limit: int = 2200, user_char_limit: int = 1375):
+    def __init__(self, memory_char_limit: int = 2200, user_char_limit: int = 1375,
+                 project_char_limit: int = DEFAULT_PROJECT_CHAR_LIMIT):
         self.memory_entries: List[str] = []
         self.user_entries: List[str] = []
+        self.project_entries: List[str] = []
         self.memory_char_limit = memory_char_limit
         self.user_char_limit = user_char_limit
+        self.project_char_limit = project_char_limit
+        # Project root this store is scoped to (None = no project session).
+        # Resolved once at load time; mid-session cwd changes don't re-key the
+        # store — that would swap the file under a live snapshot and break the
+        # frozen-system-prompt invariant. Next session picks up the new project.
+        self._project_root: Optional[Path] = None
         # Frozen snapshot for system prompt -- set once at load_from_disk()
-        self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": ""}
+        self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": "", "project": ""}
         # Per-turn counter of failed at-capacity consolidation attempts; reset
         # at each turn boundary by reset_consolidation_failures() (#42405).
         self._consolidation_failures = 0
@@ -223,20 +301,40 @@ class MemoryStore:
         self.memory_entries = self._read_file(mem_dir / "MEMORY.md")
         self.user_entries = self._read_file(mem_dir / "USER.md")
 
+        # Project store (fork): resolved from the session's git root; absent
+        # outside a repo. Same load/dedup/sanitize/snapshot path as the others.
+        self._project_root = _project_root_for_session()
+        if self._project_root is not None:
+            proj_dir = mem_dir / "projects"
+            try:
+                proj_dir.mkdir(parents=True, exist_ok=True)
+                self.project_entries = self._read_file(
+                    proj_dir / f"{_project_slug(self._project_root)}.md"
+                )
+            except (OSError, IOError):
+                self.project_entries = []
+        else:
+            self.project_entries = []
+
         # Deduplicate entries (preserves order, keeps first occurrence)
         self.memory_entries = list(dict.fromkeys(self.memory_entries))
         self.user_entries = list(dict.fromkeys(self.user_entries))
+        self.project_entries = list(dict.fromkeys(self.project_entries))
 
         # Sanitize entries for the system-prompt snapshot only.  Live state
         # (memory_entries / user_entries) keeps the raw text so the user
         # can see + remove poisoned entries via the memory tool.
         sanitized_memory = self._sanitize_entries_for_snapshot(self.memory_entries, "MEMORY.md")
         sanitized_user = self._sanitize_entries_for_snapshot(self.user_entries, "USER.md")
+        sanitized_project = self._sanitize_entries_for_snapshot(
+            self.project_entries, "PROJECT memory"
+        )
 
         # Capture frozen snapshot for system prompt injection
         self._system_prompt_snapshot = {
             "memory": self._render_block("memory", sanitized_memory),
             "user": self._render_block("user", sanitized_user),
+            "project": self._render_block("project", sanitized_project),
         }
 
     @staticmethod
@@ -317,7 +415,27 @@ class MemoryStore:
         mem_dir = get_memory_dir()
         if target == "user":
             return mem_dir / "USER.md"
+        if target == "project":
+            raise RuntimeError(
+                "project target requires an instance call (_path_for_project) "
+                "because the file is keyed by the session's project root"
+            )
         return mem_dir / "MEMORY.md"
+
+    def _path_for_project(self) -> Path:
+        """File path for the project store; requires a resolved project root."""
+        if self._project_root is None:
+            raise RuntimeError(
+                "No project root for this session — the 'project' target is "
+                "unavailable. Use target='memory' for global notes instead."
+            )
+        return get_memory_dir() / "projects" / f"{_project_slug(self._project_root)}.md"
+
+    def _path_for_target(self, target: str) -> Path:
+        """Instance-aware path lookup covering all three targets."""
+        if target == "project":
+            return self._path_for_project()
+        return MemoryStore._path_for(target)
 
     def _reload_target(self, target: str, *, skip_drift: bool = False):
         """Re-read entries from disk into in-memory state.
@@ -342,7 +460,7 @@ class MemoryStore:
         bypassed.  Used by the ``add`` action which appends without
         rewriting, so existing content is never clobbered.
         """
-        path = self._path_for(target)
+        path = self._path_for_target(target)
         raw, read_ok = self._read_raw_checked(path)
         if not read_ok:
             # Leave in-memory entries untouched and tell the caller to abort;
@@ -363,16 +481,20 @@ class MemoryStore:
     def save_to_disk(self, target: str):
         """Persist entries to the appropriate file. Called after every mutation."""
         get_memory_dir().mkdir(parents=True, exist_ok=True)
-        self._write_file(self._path_for(target), self._entries_for(target))
+        self._write_file(self._path_for_target(target), self._entries_for(target))
 
     def _entries_for(self, target: str) -> List[str]:
         if target == "user":
             return self.user_entries
+        if target == "project":
+            return self.project_entries
         return self.memory_entries
 
     def _set_entries(self, target: str, entries: List[str]):
         if target == "user":
             self.user_entries = entries
+        elif target == "project":
+            self.project_entries = entries
         else:
             self.memory_entries = entries
 
@@ -385,6 +507,8 @@ class MemoryStore:
     def _char_limit(self, target: str) -> int:
         if target == "user":
             return self.user_char_limit
+        if target == "project":
+            return self.project_char_limit
         return self.memory_char_limit
 
     def add(self, target: str, content: str) -> Dict[str, Any]:
@@ -393,12 +517,15 @@ class MemoryStore:
         if not content:
             return {"success": False, "error": "Content cannot be empty."}
 
+        if target == "project" and self._project_root is None:
+            return self._no_project_error()
+
         # Scan for injection/exfiltration before accepting
         scan_error = _scan_memory_content(content)
         if scan_error:
             return {"success": False, "error": scan_error}
 
-        with self._file_lock(self._path_for(target)):
+        with self._file_lock(self._path_for_target(target)):
             # Re-read from disk under lock to pick up writes from other sessions.
             # For add (append-only), we skip the drift guard — appending never
             # clobbers existing content, so round-trip mismatches from prior
@@ -412,7 +539,7 @@ class MemoryStore:
             # permission blip, I/O error) would be rewritten down to just the
             # new entry — wiping every prior memory. Refuse instead.
             if self._reload_target(target, skip_drift=True) is _READ_FAILED:
-                return _read_failed_error(self._path_for(target))
+                return _read_failed_error(self._path_for_target(target))
 
             entries = self._entries_for(target)
             limit = self._char_limit(target)
@@ -446,6 +573,17 @@ class MemoryStore:
 
         return self._success_response(target, "Entry added.")
 
+    def _no_project_error(self) -> Dict[str, Any]:
+        """Uniform 'no project this session' error for the project target."""
+        return {
+            "success": False,
+            "error": (
+                "No project detected for this session (no git root above the "
+                "working directory). Project memory is unavailable — use "
+                "target='memory' for global notes instead."
+            ),
+        }
+
     def replace(self, target: str, old_text: str, new_content: str) -> Dict[str, Any]:
         """Find entry containing old_text substring, replace it with new_content."""
         old_text = old_text.strip()
@@ -455,17 +593,20 @@ class MemoryStore:
         if not new_content:
             return {"success": False, "error": "new_content cannot be empty. Use 'remove' to delete entries."}
 
+        if target == "project" and self._project_root is None:
+            return self._no_project_error()
+
         # Scan replacement content for injection/exfiltration
         scan_error = _scan_memory_content(new_content)
         if scan_error:
             return {"success": False, "error": scan_error}
 
-        with self._file_lock(self._path_for(target)):
+        with self._file_lock(self._path_for_target(target)):
             bak = self._reload_target(target)
             if bak is _READ_FAILED:
-                return _read_failed_error(self._path_for(target))
+                return _read_failed_error(self._path_for_target(target))
             if bak:
-                return _drift_error(self._path_for(target), bak)
+                return _drift_error(self._path_for_target(target), bak)
 
             entries = self._entries_for(target)
             matches = [(i, e) for i, e in enumerate(entries) if old_text in e]
@@ -523,12 +664,15 @@ class MemoryStore:
         if not old_text:
             return {"success": False, "error": "old_text cannot be empty."}
 
-        with self._file_lock(self._path_for(target)):
+        if target == "project" and self._project_root is None:
+            return self._no_project_error()
+
+        with self._file_lock(self._path_for_target(target)):
             bak = self._reload_target(target)
             if bak is _READ_FAILED:
-                return _read_failed_error(self._path_for(target))
+                return _read_failed_error(self._path_for_target(target))
             if bak:
-                return _drift_error(self._path_for(target), bak)
+                return _drift_error(self._path_for_target(target), bak)
 
             entries = self._entries_for(target)
             matches = [(i, e) for i, e in enumerate(entries) if old_text in e]
@@ -575,6 +719,9 @@ class MemoryStore:
         if not operations:
             return {"success": False, "error": "operations list is empty."}
 
+        if target == "project" and self._project_root is None:
+            return self._no_project_error()
+
         # Scan every add/replace content for injection/exfil BEFORE touching
         # disk -- a single poisoned op rejects the whole batch.
         for i, op in enumerate(operations):
@@ -585,12 +732,12 @@ class MemoryStore:
                 if scan_error:
                     return {"success": False, "error": f"Operation {i + 1}: {scan_error}"}
 
-        with self._file_lock(self._path_for(target)):
+        with self._file_lock(self._path_for_target(target)):
             bak = self._reload_target(target)
             if bak is _READ_FAILED:
-                return _read_failed_error(self._path_for(target))
+                return _read_failed_error(self._path_for_target(target))
             if bak:
-                return _drift_error(self._path_for(target), bak)
+                return _drift_error(self._path_for_target(target), bak)
 
             # Work on a copy; only commit if the whole batch validates.
             working: List[str] = list(self._entries_for(target))
@@ -740,6 +887,11 @@ class MemoryStore:
 
         if target == "user":
             header = f"{MEMORY_BLOCK_HEADERS['user']} [{pct}% — {current:,}/{limit:,} chars]"
+        elif target == "project" and self._project_root is not None:
+            header = (
+                f"{MEMORY_BLOCK_HEADERS['project']} ({self._project_root}) "
+                f"[{pct}% — {current:,}/{limit:,} chars]"
+            )
         else:
             header = f"{MEMORY_BLOCK_HEADERS['memory']} [{pct}% — {current:,}/{limit:,} chars]"
 
@@ -843,7 +995,7 @@ class MemoryStore:
         Note: this is an INSTANCE method (not static) because we need the
         per-target char_limit for signal #2.
         """
-        path = self._path_for(target)
+        path = self._path_for_target(target)
         if not raw.strip():
             return None
 
@@ -899,18 +1051,21 @@ def load_on_disk_store() -> "MemoryStore":
     """
     memory_char_limit = 2200
     user_char_limit = 1375
+    project_char_limit = DEFAULT_PROJECT_CHAR_LIMIT
     try:
         from hermes_cli.config import load_config
 
         mem_cfg = (load_config() or {}).get("memory", {}) or {}
         memory_char_limit = int(mem_cfg.get("memory_char_limit", memory_char_limit))
         user_char_limit = int(mem_cfg.get("user_char_limit", user_char_limit))
+        project_char_limit = int(mem_cfg.get("project_char_limit", project_char_limit))
     except Exception:
         pass  # config optional — fall back to defaults rather than break /memory
 
     store = MemoryStore(
         memory_char_limit=memory_char_limit,
         user_char_limit=user_char_limit,
+        project_char_limit=project_char_limit,
     )
     store.load_from_disk()
     return store
@@ -1092,8 +1247,18 @@ def memory_tool(
     if target is None:
         target = "memory"
 
-    if target not in {"memory", "user"}:
-        return tool_error(f"Invalid target '{target}'. Use 'memory' or 'user'.", success=False)
+    if target not in {"memory", "user", "project"}:
+        return tool_error(f"Invalid target '{target}'. Use 'memory', 'user', or 'project'.", success=False)
+
+    # The project target needs a resolved project root (git repo) for this
+    # session; produce an actionable error instead of a crash deep in the store.
+    if target == "project" and getattr(store, "_project_root", None) is None:
+        return tool_error(
+            "No project detected for this session (no git root above the working "
+            "directory). Project memory is unavailable — use target='memory' for "
+            "global notes instead.",
+            success=False,
+        )
 
     # --- Batch path -------------------------------------------------------
     if operations:
@@ -1189,7 +1354,10 @@ MEMORY_SCHEMA = {
         "IF FULL: an add is rejected with the current entries shown. Reissue as ONE batch that "
         "removes or shortens enough stale entries and adds the new one together.\n\n"
         "TARGETS: 'user' = who the user is (name, role, preferences, style). 'memory' = your "
-        "notes (environment, conventions, tool quirks, lessons).\n\n"
+        "notes (environment, conventions, tool quirks, lessons). 'project' = facts scoped to the "
+        "git repo the session is working in (build commands, machine-specific paths, credentials "
+        "that must not be committed, project quirks) — use it to keep project facts OUT of the "
+        "global 'memory' budget; unavailable when no project is detected.\n\n"
         "SKIP: trivial/obvious info, easily re-discovered facts, raw data dumps, task progress, "
         "completed-work logs, temporary TODO state (use session_search for those). Reusable "
         "procedures belong in a skill, not memory."
@@ -1204,8 +1372,12 @@ MEMORY_SCHEMA = {
             },
             "target": {
                 "type": "string",
-                "enum": ["memory", "user"],
-                "description": "Which memory store: 'memory' for personal notes, 'user' for user profile."
+                "enum": ["memory", "user", "project"],
+                "description": (
+                    "Which memory store: 'memory' for personal notes, 'user' for user profile, "
+                    "'project' for facts scoped to the current git repo (loaded only in sessions "
+                    "inside that project)."
+                ),
             },
             "content": {
                 "type": "string",

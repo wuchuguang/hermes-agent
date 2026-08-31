@@ -1762,6 +1762,10 @@ DEFAULT_CONFIG = {
         "write_approval": False,
         "memory_char_limit": 2200,   # ~800 tokens at 2.75 chars/token
         "user_char_limit": 1375,     # ~500 tokens at 2.75 chars/token
+        # Per-project memory store (fork): char budget for memories/projects/
+        # <slug>.md, keyed by the session's git root. Independent of the global
+        # limit — project facts don't eat the MEMORY.md budget.
+        "project_char_limit": 2000,  # ~730 tokens per project
         # External memory provider plugin (empty = built-in only).
         # Set to a provider name to activate: "openviking", "mem0",
         # "hindsight", "holographic", "retaindb", "byterover".
