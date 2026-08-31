@@ -22,10 +22,12 @@ interface SessionRowCommonProps {
   card?: boolean
   isPinned: boolean
   isSelected: boolean
+  unread: boolean
   onArchive: () => void
   onBranch?: () => void
   onDelete: () => void
   onPin: () => void
+  onToggleUnread: () => void
   onResume: () => void
   reorderable?: boolean
   showProfile?: boolean
@@ -42,8 +44,9 @@ export interface VirtualSessionListProps {
   onArchiveSession: (sessionId: string) => void
   onBranchSession?: (sessionId: string, profile?: string) => void
   onDeleteSession: (sessionId: string) => void
-  onResumeSession: (sessionId: string) => void
+  onResumeSession: (sessionId: string, session?: SessionInfo) => void
   onTogglePin: (sessionId: string) => void
+  onToggleUnread: (sessionId: string) => void
   pinned: boolean
   showProfileTags?: boolean
   sortable: boolean
@@ -52,7 +55,7 @@ export interface VirtualSessionListProps {
 // Matches the card's typical rendered height (four lines when a preview
 // exists) so long card lists don't jump under the scroll thumb before
 // self-measurement catches up.
-const CARD_ROW_ESTIMATE_PX = 66
+const CARD_ROW_ESTIMATE_PX = 74
 const DIVIDER_ESTIMATE_PX = 28
 const OVERSCAN_ROWS = 12
 
@@ -67,6 +70,7 @@ export const VirtualSessionList: FC<VirtualSessionListProps> = ({
   onDeleteSession,
   onResumeSession,
   onTogglePin,
+  onToggleUnread,
   pinned,
   showProfileTags = false,
   sortable
@@ -144,17 +148,23 @@ export const VirtualSessionList: FC<VirtualSessionListProps> = ({
       onBranch: onBranchSession ? () => onBranchSession(session.id, session.profile) : undefined,
       onDelete: () => onDeleteSession(session.id),
       onPin: () => onTogglePin(sessionPinId(session)),
-      onResume: () => onResumeSession(session.id),
+      onToggleUnread: () => onToggleUnread(session.id),
+      onResume: () => onResumeSession(session.id, session),
       reorderable,
-      showProfile: showProfileTags
+      showProfile: showProfileTags,
+      unread: session.unread === true
     }
 
+    // Key by (profile, id): twins with the same stored id in two profiles are
+    // distinct rows (#92454) — a bare-id key misattributes rendered state.
+    const rowKey = `${session.profile ?? ''}::${session.id}`
+
     return reorderable ? (
-      <div data-index={virtualItem.index} key={session.id} ref={virtualizer.measureElement} style={itemStyle}>
+      <div data-index={virtualItem.index} key={rowKey} ref={virtualizer.measureElement} style={itemStyle}>
         <VirtualSortableRow rowProps={commonProps} session={session} />
       </div>
     ) : (
-      <div data-index={virtualItem.index} key={session.id} ref={virtualizer.measureElement} style={itemStyle}>
+      <div data-index={virtualItem.index} key={rowKey} ref={virtualizer.measureElement} style={itemStyle}>
         <SidebarSessionRow {...commonProps} session={session} />
       </div>
     )
