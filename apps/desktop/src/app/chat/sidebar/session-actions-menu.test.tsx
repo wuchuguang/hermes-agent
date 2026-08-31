@@ -16,7 +16,11 @@ vi.mock('@/components/pane-shell/tree/store', () => ({
   closeTreeTabsToRight: vi.fn(),
   treeTabCloseTargets: vi.fn(() => null)
 }))
-vi.mock('@/hermes', () => ({ renameSession: vi.fn() }))
+vi.mock('@/hermes', () => ({
+  renameSession: vi.fn(),
+  setApiRequestProfile: vi.fn(),
+  setSessionUnreadRemote: vi.fn(() => Promise.resolve({ ok: true }))
+}))
 vi.mock('@/i18n', () => ({
   useI18n: () => ({
     t: {
@@ -50,6 +54,7 @@ vi.mock('@/i18n', () => ({
           deleted: 'Session deleted',
           export: 'Export',
           hideTabBar: 'Hide tab bar',
+          markRead: 'Mark as read',
           pin: 'Pin',
           rename: 'Rename',
           renameDesc: 'Leave empty to clear.',
@@ -79,8 +84,12 @@ vi.mock('@/store/projects', () => ({
 vi.mock('@/store/session', () => ({
   $activeSessionId: atom<null | string>(null),
   $connection: atom<null | { mode: string }>(null),
+  $cronSessions: atom<unknown[]>([]),
+  $messagingSessions: atom<unknown[]>([]),
   $selectedStoredSessionId: atom<null | string>(null),
   $sessions: atom<unknown[]>([]),
+  $unreadFinishedSessionIds: atom<string[]>([]),
+  markSessionRead: vi.fn(),
   sessionMatchesStoredId: vi.fn(() => false),
   sessionPinId: vi.fn((s: { id: string }) => s.id),
   setSessions: vi.fn()
@@ -91,11 +100,14 @@ vi.mock('@/store/session-color', () => ({
 }))
 vi.mock('@/store/session-states', () => ({
   $sessionTiles: atom<unknown[]>([]),
+  closeAllOpenSessionTiles: vi.fn(),
   openSessionTile: vi.fn()
 }))
 vi.mock('@/store/windows', () => ({
   canOpenSessionInTerminal: () => false,
   canOpenSessionWindow: () => false,
+  isBrowserWindow: () => false,
+  isSecondaryWindow: () => false,
   openSessionInNewWindow: vi.fn(),
   openSessionInTerminal: vi.fn()
 }))
@@ -237,12 +249,19 @@ describe('SessionActionsMenu', () => {
     expect(await screen.queryByRole('dialog')).toBeNull()
     expect(onDelete).not.toHaveBeenCalled()
 
-    // Re-open and confirm with Enter: the delete call fires.
+    // Re-open and confirm with Enter at wherever focus actually is. Firing on
+    // the dialog node would pass even when the menu leaves focus on the row
+    // trigger — where Enter re-activates the row instead of confirming.
     fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
     fireEvent.pointerUp(trigger, { button: 0, pointerType: 'mouse' })
     fireEvent.click(trigger)
     fireEvent.click(await screen.findByRole('menuitem', { name: /delete/i }))
-    fireEvent.keyDown(await screen.findByRole('dialog'), { key: 'Enter' })
+
+    const reopened = await screen.findByRole('dialog')
+    // eslint-disable-next-line no-restricted-globals -- asserting real focus requires the live document
+    await waitFor(() => expect(reopened.contains(document.activeElement)).toBe(true))
+    // eslint-disable-next-line no-restricted-globals -- asserting real focus requires the live document
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
 
     expect(await screen.findByText('Session deleted')).toBeTruthy()
     expect(onDelete).toHaveBeenCalledTimes(1)

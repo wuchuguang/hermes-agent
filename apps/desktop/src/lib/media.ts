@@ -40,6 +40,17 @@ export function mediaKind(path: string): MediaKind {
   return mediaInfo(path)?.kind ?? 'file'
 }
 
+// Markdown is renderable content, not an opaque download: the preview rail
+// already knows how to render a `.md` file (rendered/source toggle), so the
+// MEDIA delivery path routes these to a preview instead of a download link.
+const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdown', 'mkd'])
+
+export function isMarkdownDocumentPath(path: string): boolean {
+  const ext = path.split(/[?#]/, 1)[0]?.split('.').pop()?.toLowerCase()
+
+  return ext ? MARKDOWN_EXTENSIONS.has(ext) : false
+}
+
 export function mediaMime(path: string): string {
   return mediaInfo(path)?.mime ?? 'application/octet-stream'
 }
@@ -62,7 +73,7 @@ export function isInlineMediaSrc(path: string): boolean {
   return /^(?:https?|data):/i.test(path)
 }
 
-function isFileMediaPath(path: string): boolean {
+export function isFileMediaPath(path: string): boolean {
   return /^(?:file:|\/|~\/|[a-z]:[\\/]|\\\\)/i.test(path)
 }
 
@@ -83,16 +94,16 @@ export async function resolveMediaDisplaySrc(path: string): Promise<string> {
 }
 
 // Audio/video need a seekable source instead of a whole-file data URL. Keep
-// remote URLs untouched, route gateway-local files through the authenticated
-// download endpoint, and reserve the Electron protocol for files on this
-// desktop machine.
+// remote URLs untouched and route filesystem paths through the Electron media
+// protocol. Its main-process handler reads local files directly or proxies a
+// remote gateway with the connection's bearer/cookie/token authentication.
 export async function resolveMediaPlaybackSrc(path: string): Promise<string> {
   if (isInlineMediaSrc(path)) {
     return path
   }
 
   if (window.hermesDesktop && ['audio', 'video'].includes(mediaKind(path))) {
-    return isRemoteGateway() ? mediaExternalUrl(path) : mediaStreamUrl(path)
+    return isRemoteGateway() ? mediaGatewayStreamUrl(path) : mediaStreamUrl(path)
   }
 
   return resolveMediaDisplaySrc(path)
@@ -117,6 +128,29 @@ export function mediaExternalUrl(path: string): string {
   }
 
   return /^file:/i.test(path) ? path : `file://${path}`
+}
+
+// Remote gateway audio/video is proxied by the Electron main process. OAuth
+// connections intentionally expose no static token to the renderer, so a bare
+// HTTPS source cannot authenticate reliably. The custom protocol keeps secrets
+// out of renderer URLs while forwarding Range requests to /api/files/stream.
+export function mediaGatewayStreamUrl(path: string): string {
+  const conn = $connection.get()
+
+  if (isRemoteGateway()) {
+    const file = encodeURIComponent(filePathFromMediaPath(path))
+
+    const scope = [
+      conn?.connectionId ? `connectionId=${encodeURIComponent(conn.connectionId)}` : '',
+      conn?.profile ? `profile=${encodeURIComponent(conn.profile)}` : ''
+    ]
+      .filter(Boolean)
+      .join('&')
+
+    return `hermes-media://remote/${file}${scope ? `?${scope}` : ''}`
+  }
+
+  return mediaExternalUrl(path)
 }
 
 // Custom Electron scheme (registered in electron/main.ts) that streams a local
@@ -180,6 +214,7 @@ export async function downloadGatewayMediaFile(
   }
 
   return window.hermesDesktop.saveGatewayFile({
+    connectionId: conn?.connectionId,
     path: file,
     profile: conn?.profile,
     suggestedName: mediaName(file)
