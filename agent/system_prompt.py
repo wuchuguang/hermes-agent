@@ -943,6 +943,16 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
                 proj_block = agent._memory_store.format_for_system_prompt("project")
                 if proj_block:
                     volatile_parts.append(proj_block)
+                # Linked dependency projects (fork): read-only recall of the
+                # project memory of this repo's local dependency libraries.
+                try:
+                    linked_block = agent._memory_store.format_for_system_prompt(
+                        "linked_projects"
+                    )
+                except Exception:
+                    linked_block = None
+                if linked_block:
+                    volatile_parts.append(linked_block)
             except Exception:
                 pass
 

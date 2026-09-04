@@ -99,6 +99,10 @@ ENTRY_DELIMITER = "\n§\n"
 # ---------------------------------------------------------------------------
 
 DEFAULT_PROJECT_CHAR_LIMIT = 2000
+# Cap on how many linked dependency projects get their memory injected into
+# the system prompt. Yhyun-style monorepos declare 10+ local deps; unbounded
+# injection would blow the prompt budget. Priority = package.json order.
+MAX_LINKED_PROJECTS = 5
 
 
 def _project_slug(project_root: Path) -> str:
@@ -114,6 +118,84 @@ def _project_slug(project_root: Path) -> str:
     return f"{digest}-{tail[:32]}"
 
 
+def _package_name_for_root(root: Path) -> Optional[str]:
+    """Package name of a local repo: package.json ``name`` then pyproject name."""
+    pkg = root / "package.json"
+    try:
+        if pkg.is_file():
+            name = json.loads(pkg.read_text("utf-8")).get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+    except (OSError, ValueError):
+        pass
+    py = root / "pyproject.toml"
+    try:
+        if py.is_file():
+            m = re.search(r'(?m)^\s*name\s*=\s*["\']([^"\']+)["\']', py.read_text("utf-8"))
+            if m:
+                return m.group(1).strip()
+    except OSError:
+        pass
+    return None
+
+
+def _project_dependency_names(project_root: Optional[Path]) -> List[str]:
+    """Collect declared dependency package names for a project root.
+
+    Reads ``package.json`` (dependencies + devDependencies) and Python
+    requirement files (requirements*.txt / pyproject dependencies declared as
+    ``name`` / ``name>=x`` / ``name==x``), best-effort: any parse failure just
+    skips that file. Used to link a project's memory store to its local
+    dependency libraries (same-machine sibling repos), so a session inside
+    ``center-browser-cmd`` also sees facts learned in ``yhyun-core-utils``.
+    """
+    if project_root is None:
+        return []
+    names: List[str] = []
+    pkg = project_root / "package.json"
+    try:
+        if pkg.is_file():
+            data = json.loads(pkg.read_text("utf-8"))
+            for key in ("dependencies", "devDependencies", "peerDependencies"):
+                names.extend((data.get(key) or {}).keys())
+    except (OSError, ValueError):
+        pass
+    for req_name in ("requirements.txt", "requirements-dev.txt", "dev-requirements.txt"):
+        req = project_root / req_name
+        try:
+            if req.is_file():
+                for line in req.read_text("utf-8").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith(("#", "-")):
+                        continue
+                    # strip extras/env markers, keep the distribution name
+                    name = re.split(r"[\s<>=!~\[;]", line, maxsplit=1)[0]
+                    if name:
+                        names.append(name)
+        except OSError:
+            pass
+    py = project_root / "pyproject.toml"
+    try:
+        if py.is_file():
+            text = py.read_text("utf-8")
+            in_deps = False
+            for line in text.splitlines():
+                s = line.strip()
+                if s.startswith("dependencies") and "=" in s:
+                    in_deps = True
+                    continue
+                if in_deps:
+                    if not s.startswith("\"") and not s.startswith("'"):
+                        break
+                    m = re.match(r"[\"']([A-Za-z0-9_.-]+)", s)
+                    if m:
+                        names.append(m.group(1))
+    except OSError:
+        pass
+    # de-dup, preserve order
+    return list(dict.fromkeys(names))
+
+
 def _project_root_for_session() -> Optional[Path]:
     """Resolve the project root for the current session, or None.
 
@@ -121,6 +203,12 @@ def _project_root_for_session() -> Optional[Path]:
     TERMINAL_CWD → os.getcwd(), same resolution as context-file loading) to
     the nearest containing ``.git`` directory. Returns None outside any repo
     — sessions not tied to a project simply have no project store.
+
+    Fork extension: when no ``.git`` ancestor exists, a directory carrying a
+    package manifest (``package.json`` / ``pyproject.toml``) still counts as a
+    project root — npm libraries cloned/extracted without git history
+    (e.g. yhyun-pkg-server) keep their own per-project memory. The user's
+    home directory itself is never a project root.
     """
     try:
         from agent.runtime_cwd import resolve_agent_cwd
@@ -142,10 +230,24 @@ def _project_root_for_session() -> Optional[Path]:
             return None
     except Exception:
         pass
+    home = Path.home()
+    manifest_root: Optional[Path] = None
     for candidate in (start, *start.parents):
         if (candidate / ".git").exists():
             return candidate
-    return None
+        if manifest_root is None and candidate != home and not _is_install_tree_safe(candidate):
+            if (candidate / "package.json").is_file() or (candidate / "pyproject.toml").is_file():
+                manifest_root = candidate
+    return manifest_root
+
+
+def _is_install_tree_safe(path: Path) -> bool:
+    try:
+        from agent.runtime_cwd import _is_install_tree
+
+        return _is_install_tree(path)
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -263,10 +365,19 @@ class MemoryStore:
         # store — that would swap the file under a live snapshot and break the
         # frozen-system-prompt invariant. Next session picks up the new project.
         self._project_root: Optional[Path] = None
+        # Linked dependency projects (fork): package.json/pyproject dependency
+        # names resolved to local sibling repos that have their own project
+        # memory file. Injected READ-ONLY into the snapshot as LINKED PROJECT
+        # MEMORY — facts stay stored in their own project's file (各存各的),
+        # but a session in the dependent repo can recall them (联想).
+        self._linked_projects: List[Tuple[str, Path]] = []
+        self._linked_entries: List[Tuple[str, List[str]]] = []
         self.memory_enabled = memory_enabled
         self.user_profile_enabled = user_profile_enabled
         # Frozen snapshot for system prompt -- set once at load_from_disk()
-        self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": "", "project": ""}
+        self._system_prompt_snapshot: Dict[str, str] = {
+            "memory": "", "user": "", "project": "", "linked_projects": "",
+        }
         # Per-turn counter of failed at-capacity consolidation attempts; reset
         # at each turn boundary by reset_consolidation_failures() (#42405).
         self._consolidation_failures = 0
@@ -280,6 +391,68 @@ class MemoryStore:
             # project facts OUT of MEMORY.md, so it follows that store's gate.
             return self.memory_enabled and self._project_root is not None
         return self.memory_enabled
+
+    def _resolve_linked_projects(self, mem_dir: Path) -> List[Tuple[str, Path]]:
+        """Map the project's declared deps to local repos with memory files.
+
+        Resolution is name-based: scan the project root's parent directory
+        (sibling repos — the common monorepo layout) plus ``memory.project_code_roots``
+        from config (for sibling-dir layouts like ~/git-repo), reading each
+        child's ``package.json`` name / ``pyproject.toml`` name. A dependency
+        links only if (a) a local repo with that package name exists and
+        (b) it already has a project memory file to recall. Skipped entirely
+        when no project memory files exist yet (zero scan cost cold start).
+        Read-only: linked files are never written through this store.
+        """
+        if self._project_root is None:
+            return []
+        proj_dir = mem_dir / "projects"
+        try:
+            if not any(proj_dir.glob("*.md")):
+                return []
+        except OSError:
+            return []
+        dep_names = set(_project_dependency_names(self._project_root))
+        if not dep_names:
+            return []
+        roots: List[Path] = []
+        parent = self._project_root.parent
+        if parent.is_dir() and parent != self._project_root:
+            roots.append(parent)
+        try:
+            from hermes_cli.config import load_config
+
+            cfg = load_config() or {}
+            for raw in (get_builtin_memory_config(cfg).get("project_code_roots") or []):
+                p = Path(str(raw)).expanduser()
+                if p.is_dir() and p not in roots:
+                    roots.append(p)
+        except Exception:
+            pass
+        name_to_root: Dict[str, Path] = {}
+        for root in roots:
+            try:
+                children = sorted(root.iterdir())
+            except OSError:
+                continue
+            for child in children:
+                if not child.is_dir() or child == self._project_root:
+                    continue
+                if child.name in {".git", "node_modules"} or child.name.startswith("."):
+                    continue
+                pkg_name = _package_name_for_root(child)
+                if pkg_name and pkg_name not in name_to_root:
+                    name_to_root[pkg_name] = child
+        linked: List[Tuple[str, Path]] = []
+        for dep in _project_dependency_names(self._project_root):
+            root = name_to_root.get(dep)
+            if root is None or root == self._project_root:
+                continue
+            if (proj_dir / f"{_project_slug(root)}.md").is_file():
+                linked.append((dep, root))
+            if len(linked) >= MAX_LINKED_PROJECTS:
+                break
+        return linked
 
     def reset_consolidation_failures(self) -> None:
         """Reset the per-turn consolidation-failure counter (call at turn start)."""
@@ -346,6 +519,22 @@ class MemoryStore:
         else:
             self.project_entries = []
 
+        # Linked dependency projects (fork): resolve the project's declared
+        # dependency names to local sibling repos that already have a project
+        # memory file. Read-only recall — linked projects are never writable
+        # through this store, so one repo can never clobber another's file.
+        self._linked_projects = self._resolve_linked_projects(mem_dir)
+        self._linked_entries = []
+        for dep_name, dep_root in self._linked_projects:
+            try:
+                entries = self._read_file(
+                    mem_dir / "projects" / f"{_project_slug(dep_root)}.md"
+                )
+            except (OSError, IOError):
+                entries = []
+            if entries:
+                self._linked_entries.append((dep_name, entries))
+
         # Deduplicate entries (preserves order, keeps first occurrence)
         self.memory_entries = list(dict.fromkeys(self.memory_entries))
         self.user_entries = list(dict.fromkeys(self.user_entries))
@@ -360,12 +549,44 @@ class MemoryStore:
             self.project_entries, "PROJECT memory"
         )
 
+        # Linked project entries are sanitized per-project too; each linked
+        # project gets a compact sub-block labeled with its package name.
+        linked_parts: List[str] = []
+        for dep_name, entries in self._linked_entries:
+            sanitized = self._sanitize_entries_for_snapshot(
+                entries, f"LINKED project {dep_name}"
+            )
+            if not sanitized:
+                continue
+            linked_parts.append(
+                f"── {dep_name} ──\n" + ENTRY_DELIMITER.join(sanitized)
+            )
+
         # Capture frozen snapshot for system prompt injection
         self._system_prompt_snapshot = {
             "memory": self._render_block("memory", sanitized_memory),
             "user": self._render_block("user", sanitized_user),
             "project": self._render_block("project", sanitized_project),
+            "linked_projects": self._render_linked_block(linked_parts),
         }
+
+    def _render_linked_block(self, parts: List[str]) -> str:
+        """Render the LINKED PROJECT MEMORY block (fork).
+
+        Read-only recall of dependency projects' project memory. Explicitly
+        labeled read-only so the model treats these facts as belonging to the
+        dependency's own store, not writable from this session.
+        """
+        if not parts or self._project_root is None:
+            return ""
+        separator = "═" * 46
+        header = (
+            f"LINKED PROJECT MEMORY (read-only recall, {self._project_root}) — "
+            f"facts learned inside dependency projects of this repo. They are "
+            f"stored in each dependency's own project memory; do NOT write to "
+            f"them from this session."
+        )
+        return f"{separator}\n{header}\n{separator}\n" + "\n".join(parts)
 
     @staticmethod
     def _sanitize_entries_for_snapshot(entries: List[str], filename: str) -> List[str]:
@@ -1456,7 +1677,9 @@ MEMORY_SCHEMA = {
         "notes (environment, conventions, tool quirks, lessons). 'project' = facts scoped to the "
         "git repo the session is working in (build commands, machine-specific paths, credentials "
         "that must not be committed, project quirks) — use it to keep project facts OUT of the "
-        "global 'memory' budget; unavailable when no project is detected.\n\n"
+        "global 'memory' budget; unavailable when no project is detected. Linked dependency "
+        "projects' memories are injected read-only (LINKED PROJECT MEMORY); write facts about a "
+        "dependency from a session inside that dependency.\n\n"
         "SKIP: trivial/obvious info, easily re-discovered facts, raw data dumps, task progress, "
         "completed-work logs, temporary TODO state (use session_search for those). Reusable "
         "procedures belong in a skill, not memory."

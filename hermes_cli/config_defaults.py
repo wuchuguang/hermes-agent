@@ -2130,6 +2130,13 @@ DEFAULT_CONFIG = {
         # <slug>.md, keyed by the session's git root. Independent of the global
         # limit — project facts don't eat the MEMORY.md budget.
         "project_char_limit": 2000,  # ~730 tokens per project
+        # Linked project memory (fork): local code roots scanned to resolve
+        # dependency package names (package.json/pyproject) back to sibling
+        # repos. Defaults to the project root's parent dir; add roots here for
+        # sibling-dir layouts (e.g. ["~/git-repo", "~/node-projects"]). Only
+        # projects that already have a project memory file are linked, and at
+        # most MAX_LINKED_PROJECTS (5) are injected, read-only.
+        "project_code_roots": [],
         # Periodic built-in memory review. External providers with automatic
         # turn/session extraction can set this to 0 and keep the small local
         # store reserved for explicit high-frequency operational facts.
