@@ -209,6 +209,13 @@ def _project_root_for_session() -> Optional[Path]:
     project root — npm libraries cloned/extracted without git history
     (e.g. yhyun-pkg-server) keep their own per-project memory. The user's
     home directory itself is never a project root.
+
+    Fork extension 2 (project-aware memory): when the session's directory
+    belongs to a first-class Project (``hermes project`` / projects.db
+    multi-folder workspace), the store anchors to the project's PRIMARY
+    folder instead of the session's own git root. Sessions started inside
+    any member library then share one store; a single-folder project
+    resolves to that folder, matching the git-root behavior below.
     """
     try:
         from agent.runtime_cwd import resolve_agent_cwd
@@ -234,11 +241,44 @@ def _project_root_for_session() -> Optional[Path]:
     manifest_root: Optional[Path] = None
     for candidate in (start, *start.parents):
         if (candidate / ".git").exists():
+            # First-class Project wins over the bare git root: sessions in any
+            # member library share the project's primary-folder store.
+            project_root = _primary_root_for_session(start)
+            if project_root is not None:
+                return project_root
             return candidate
         if manifest_root is None and candidate != home and not _is_install_tree_safe(candidate):
             if (candidate / "package.json").is_file() or (candidate / "pyproject.toml").is_file():
                 manifest_root = candidate
     return manifest_root
+
+
+def _primary_root_for_session(start: Path) -> Optional[Path]:
+    """Primary folder of the first-class Project owning *start*, or None.
+
+    Looks up projects.db (``hermes project`` workspaces). ``start`` must be a
+    resolved directory. Returns the project's primary path when it exists on
+    disk; never raises — callers fall back to the plain git root on any error.
+    """
+    try:
+        from hermes_cli.projects_db import connect_closing, project_for_path
+
+        with connect_closing() as conn:
+            project = project_for_path(conn, str(start))
+        if project is None:
+            return None
+        primary = project.primary_path
+        if not primary:
+            return None
+        primary_path = Path(primary).expanduser()
+        if primary_path.is_dir():
+            try:
+                return primary_path.resolve()
+            except OSError:
+                return primary_path
+        return None
+    except Exception:
+        return None
 
 
 def _is_install_tree_safe(path: Path) -> bool:

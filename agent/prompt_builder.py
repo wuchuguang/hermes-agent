@@ -2354,6 +2354,48 @@ def _load_hermes_md(cwd_path: Path, context_length: Optional[int] = None) -> str
         return ""
 
 
+def _project_workspace_map(cwd_path: Path) -> str:
+    """Render the first-class Project workspace map for *cwd_path*, or "".
+
+    A session whose directory falls under any folder of a ``hermes project``
+    multi-folder workspace gets a deterministic block listing every member
+    folder (primary marked), so the agent can address sibling libraries by
+    absolute path and knows where the shared project store lives. Best-effort:
+    any failure (no projects.db, closed DB, import error) returns "".
+    """
+    try:
+        from hermes_cli.projects_db import connect_closing, project_for_path
+
+        with connect_closing() as conn:
+            project = project_for_path(conn, str(cwd_path))
+        if project is None or not project.folders:
+            return ""
+        lines = [
+            f"## Project Workspace: {project.name}",
+            "",
+            "This project spans multiple directories (independent libs/repos).",
+            "Cross-library work MUST use these absolute paths:",
+            "",
+        ]
+        for folder in project.folders:
+            marker = " (primary)" if folder.is_primary else ""
+            label = f" — {folder.label}" if getattr(folder, "label", None) else ""
+            lines.append(f"- {folder.path}{marker}{label}")
+        primary = project.primary_path or next(
+            (f.path for f in project.folders if f.is_primary), None
+        )
+        if primary:
+            lines.append("")
+            lines.append(
+                f"Project memory is shared and anchored at the primary folder: {primary}"
+            )
+        lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.debug("project workspace map unavailable: %s", e)
+        return ""
+
+
 def _agents_md_directory_chain(cwd_path: Path) -> List[Path]:
     """Directories to check for AGENTS.md: git root first, cwd last.
 
@@ -2557,6 +2599,15 @@ def build_context_files_prompt(
         )
     if project_context:
         sections.append(project_context)
+
+    # Multi-folder project workspace map (fork): when the session's directory
+    # belongs to a first-class Project (``hermes project``), list all member
+    # folders so the agent knows the sibling libraries and can address them by
+    # absolute path. Deterministic from cwd + projects.db, computed once at
+    # startup — the prompt-cache invariant holds.
+    workspace_map = _project_workspace_map(cwd_path)
+    if workspace_map:
+        sections.append(workspace_map)
 
     # SOUL.md from HERMES_HOME only — skip when already loaded as identity
     if not skip_soul:
