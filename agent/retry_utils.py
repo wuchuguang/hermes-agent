@@ -6,6 +6,7 @@ rate-limited provider concurrently.
 """
 
 import random
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -206,3 +207,77 @@ def zai_coding_overload_retry_ceiling(short_attempts: int = _ZAI_CODING_OVERLOAD
     value for Z.AI Coding overload 429s so the 30/60/90/120s waits run.
     """
     return short_attempts + len(_ZAI_CODING_OVERLOAD_LONG_BACKOFF) + 1
+
+
+# ── Z.AI / Zhipu subscription quota windows (coding plan) ────────────────
+# The GLM coding-plan endpoint enforces rolling usage windows and reports
+# exhaustion as HTTP 429 with a Chinese body carrying the reset instant:
+#   [1308] 已达到 5 小时的使用上限。您的限额将在 2026-09-18 19:49:14 重置。
+#   [1310] 您已达到每周/每月使用上限，您的限额将在 2026-09-17 18:00:27 重置。
+# Short exponential retries can never outlive a multi-hour window, so the
+# correct recovery is to sleep until the stated reset instant (+ small skew)
+# and retry once. Reset times are absolute local timestamps.
+
+_ZAI_SUBSCRIPTION_QUOTA_PATTERN = re.compile(
+    r"使用上限.*?(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?)\s*重置",
+    re.DOTALL,
+)
+
+# Skew added to the parsed reset instant — a retry landing exactly at reset
+# can still be served by a stale backend node.
+_ZAI_SUBSCRIPTION_RESET_SKEW_SECONDS = 5.0
+
+# If the parsed reset is unparseable or absurdly far away, fall back to a
+# bounded long wait instead of trusting the body blindly.
+_ZAI_SUBSCRIPTION_MAX_WAIT_SECONDS = 24 * 3600.0
+
+
+def is_zai_subscription_quota_error(*, error: Any) -> bool:
+    """Return True for Z.AI/Zhipu subscription quota-window 429s.
+
+    Matches the [1308]/[1310] family: a Chinese "usage limit reached" body
+    that states a reset timestamp. Status must be 429 so exhausted-quota
+    errors on other status codes keep flowing through the normal classifier.
+    """
+    status = getattr(error, "status_code", None)
+    if status is not None and status != 429:
+        return False
+    text = _error_text(error)
+    return "使用上限" in text and "重置" in text
+
+
+def parse_zai_subscription_reset_wait(error: Any, *, now: Optional[datetime] = None) -> Optional[float]:
+    """Seconds to wait until a Z.AI subscription quota window resets (+skew).
+
+    Parses the absolute local timestamp from the error body. Returns ``None``
+    when the message shape is unrecognized or the reset instant is missing —
+    callers keep their default backoff in that case. Waits are clamped to
+    ``[0, _ZAI_SUBSCRIPTION_MAX_WAIT_SECONDS]``: a past reset instant means
+    "retry now" (the window may have rolled over mid-request), not an error.
+    """
+    text = _error_text(error)
+    match = _ZAI_SUBSCRIPTION_QUOTA_PATTERN.search(text)
+    if not match:
+        return None
+    raw = match.group(1).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+        try:
+            reset_at = datetime.strptime(raw, fmt)
+            break
+        except ValueError:
+            continue
+    else:
+        return None
+    current = now or datetime.now()
+    wait = (reset_at - current).total_seconds() + _ZAI_SUBSCRIPTION_RESET_SKEW_SECONDS
+    return max(0.0, min(wait, _ZAI_SUBSCRIPTION_MAX_WAIT_SECONDS))
+
+
+def zai_subscription_quota_retry_ceiling() -> int:
+    """Retry-loop ceiling that leaves room for the reset-and-retry-once wait.
+
+    ``max_retries`` must be raised past the default (3) or the loop gives up
+    before the long reset wait gets a chance to run (same rationale as
+    ``zai_coding_overload_retry_ceiling``).
+    """
+    return _ZAI_CODING_OVERLOAD_SHORT_ATTEMPTS + 2

@@ -96,8 +96,11 @@ from agent.provider_projection import splice_provider_projection
 from agent.retry_utils import (
     adaptive_rate_limit_backoff,
     is_zai_coding_overload_error,
+    is_zai_subscription_quota_error,
     jittered_backoff,
+    parse_zai_subscription_reset_wait,
     zai_coding_overload_retry_ceiling,
+    zai_subscription_quota_retry_ceiling,
 )
 from agent.repetition_guard import is_repetition_dominated
 from agent.trajectory import has_incomplete_scratchpad
@@ -6033,6 +6036,18 @@ def run_conversation(
                 )
                 if _is_zai_coding_overload:
                     max_retries = max(max_retries, zai_coding_overload_retry_ceiling())
+                # Z.AI/Zhipu subscription quota windows ([1308] 5-hour /
+                # [1310] weekly-monthly "使用上限 ... HH:MM 重置" 429s) classify
+                # as rate_limit, but no short backoff can outlive a multi-hour
+                # window. Detect them here so the retry ceiling is raised and
+                # the backoff below can sleep until the stated reset instant.
+                _zai_subscription_wait = (
+                    parse_zai_subscription_reset_wait(api_error)
+                    if is_zai_subscription_quota_error(error=api_error)
+                    else None
+                )
+                if _zai_subscription_wait is not None:
+                    max_retries = max(max_retries, zai_subscription_quota_retry_ceiling())
                 _should_fallback = (
                     (is_rate_limited and _wrapped_output_cap_budget is None)
                     or (_is_transport_failure and retry_count >= 2)
@@ -7258,7 +7273,13 @@ def run_conversation(
                                 pass
                 wait_time = _retry_after if _retry_after else jittered_backoff(retry_count, base_delay=2.0, max_delay=60.0)
                 _backoff_policy = None
-                if (is_rate_limited or _is_zai_coding_overload) and not _retry_after:
+                if _zai_subscription_wait is not None and not _retry_after:
+                    # Sleep until the subscription window's stated reset instant
+                    # (+skew). No exponential schedule can bridge a multi-hour
+                    # window; this is a single bounded wait-then-retry.
+                    wait_time = _zai_subscription_wait
+                    _backoff_policy = "zai_subscription_reset"
+                elif (is_rate_limited or _is_zai_coding_overload) and not _retry_after:
                     wait_time, _backoff_policy = adaptive_rate_limit_backoff(
                         retry_count,
                         base_url=str(_base),
@@ -7279,6 +7300,14 @@ def run_conversation(
                     # progress immediately instead of making the TUI look frozen.
                     if _backoff_policy == "zai_coding_overload_long":
                         agent._emit_status(_rate_limit_status)
+                    elif _backoff_policy == "zai_subscription_reset":
+                        # Multi-hour subscription window — the user must see the
+                        # wait immediately (buffered status would look like a
+                        # hang until the turn recovers or dies).
+                        agent._emit_status(
+                            f"⏳ 订阅额度窗口已用尽（[1308]/[1310]），等待额度重置后自动重试："
+                            f"还需 {wait_time / 60.0:.1f} 分钟（attempt {retry_count + 1}/{max_retries}）..."
+                        )
                     else:
                         agent._buffer_status(_rate_limit_status)
                 else:

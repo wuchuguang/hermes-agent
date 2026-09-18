@@ -3,9 +3,17 @@
 import threading
 
 import agent.retry_utils as retry_utils
+from datetime import datetime
 from types import SimpleNamespace
 
-from agent.retry_utils import adaptive_rate_limit_backoff, is_zai_coding_overload_error, jittered_backoff
+from agent.retry_utils import (
+    adaptive_rate_limit_backoff,
+    is_zai_coding_overload_error,
+    is_zai_subscription_quota_error,
+    jittered_backoff,
+    parse_zai_subscription_reset_wait,
+    zai_subscription_quota_retry_ceiling,
+)
 
 
 def test_backoff_is_exponential():
@@ -208,3 +216,67 @@ class TestParseRetryAfterSeconds:
                 raise RuntimeError("boom")
 
         assert parse_retry_after_seconds(Explosive()) is None
+
+
+# ── Z.AI / Zhipu subscription quota windows ([1308]/[1310] 429s) ─────────
+
+
+def _quota_error(body: str, status: int = 429):
+    return SimpleNamespace(status_code=status, message=body)
+
+
+def test_subscription_quota_error_detected():
+    err = _quota_error(
+        "HTTP 429: [1308][已达到 5 小时的使用上限。您的限额将在 2026-09-18 19:49:14 重置。][trace]"
+    )
+    assert is_zai_subscription_quota_error(error=err)
+
+
+def test_subscription_quota_error_weekly_monthly_variant():
+    err = _quota_error(
+        "HTTP 429: [1310][您已达到每周/每月使用上限，您的限额将在 2026-09-17 18:00:27 重置。][trace]"
+    )
+    assert is_zai_subscription_quota_error(error=err)
+
+
+def test_subscription_quota_error_rejects_non_429():
+    err = _quota_error("[1308][已达到使用上限，19:49 重置]", status=400)
+    assert not is_zai_subscription_quota_error(error=err)
+
+
+def test_subscription_quota_error_rejects_other_messages():
+    assert not is_zai_subscription_quota_error(
+        error=_quota_error("rate limit exceeded, try again in 30s")
+    )
+
+
+def test_parse_reset_wait_future_timestamp():
+    err = _quota_error(
+        "[1308][已达到 5 小时的使用上限。您的限额将在 2026-09-18 19:49:14 重置。]"
+    )
+    now = datetime(2026, 9, 18, 19, 20, 0)
+    wait = parse_zai_subscription_reset_wait(err, now=now)
+    # reset in 29m14s + 5s skew
+    assert wait is not None and abs(wait - (29 * 60 + 14 + 5)) < 1
+
+
+def test_parse_reset_wait_past_timestamp_clamps_to_zero():
+    err = _quota_error("[1308][使用上限，您的限额将在 2026-09-18 19:49:14 重置。]")
+    now = datetime(2026, 9, 18, 20, 0, 0)
+    assert parse_zai_subscription_reset_wait(err, now=now) == 0.0
+
+
+def test_parse_reset_wait_minute_precision():
+    err = _quota_error("[1310][每周/每月使用上限，限额将在 2026-09-17 18:00 重置。]")
+    now = datetime(2026, 9, 17, 17, 59, 50)
+    wait = parse_zai_subscription_reset_wait(err, now=now)
+    assert wait is not None and abs(wait - (10 + 5)) < 1
+
+
+def test_parse_reset_wait_unparseable_returns_none():
+    err = _quota_error("[1308][使用上限已达到，请稍后重置。]")
+    assert parse_zai_subscription_reset_wait(err) is None
+
+
+def test_subscription_quota_retry_ceiling_exceeds_default():
+    assert zai_subscription_quota_retry_ceiling() > 3
