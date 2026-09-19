@@ -280,3 +280,27 @@ def test_parse_reset_wait_unparseable_returns_none():
 
 def test_subscription_quota_retry_ceiling_exceeds_default():
     assert zai_subscription_quota_retry_ceiling() > 3
+
+
+def test_parse_reset_wait_hhmm_no_seconds():
+    # Provider sometimes omits seconds: "19:49 重置" instead of "19:49:14 重置"
+    err = _quota_error("[1308][使用上限，您的限额将在 2026-09-18 19:49 重置。]")
+    now = datetime(2026, 9, 18, 19, 40, 0)
+    wait = parse_zai_subscription_reset_wait(err, now=now)
+    assert wait is not None and abs(wait - (9 * 60 + 5)) < 1
+
+
+def test_parse_reset_wait_crosses_midnight():
+    # Reset lands after midnight next day
+    err = _quota_error("[1308][使用上限，您的限额将在 2026-09-19 00:05:00 重置。]")
+    now = datetime(2026, 9, 18, 23, 55, 0)
+    wait = parse_zai_subscription_reset_wait(err, now=now)
+    assert wait is not None and abs(wait - (10 * 60 + 5)) < 1
+
+
+def test_parse_reset_wait_far_future_clamps_to_max():
+    err = _quota_error("[1310][使用上限，您的限额将在 2027-09-18 19:49:14 重置。]")
+    now = datetime(2026, 9, 18, 19, 49, 14)
+    wait = parse_zai_subscription_reset_wait(err, now=now)
+    assert wait is not None
+    assert wait <= 24 * 3600.0
