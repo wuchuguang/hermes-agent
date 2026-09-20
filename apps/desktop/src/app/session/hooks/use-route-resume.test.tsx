@@ -545,8 +545,8 @@ describe('useRouteResume bounded auto-retry after a failed resume', () => {
     // No immediate fire — the retry is scheduled behind the backoff timer.
     expect(resumeSession).not.toHaveBeenCalled()
 
-    // First backoff window (1s) elapses → one retry.
-    vi.advanceTimersByTime(1_000)
+    // First backoff window (2s) elapses → one retry.
+    vi.advanceTimersByTime(2_000)
     expect(resumeSession).toHaveBeenCalledTimes(1)
     expect(resumeSession).toHaveBeenCalledWith('session-1', true)
   })
@@ -590,15 +590,19 @@ describe('useRouteResume bounded auto-retry after a failed resume', () => {
     const { rerender } = render(<RouteResumeHarness {...props} resumeFailedSessionId="session-1" />)
     resumeSession.mockClear() // drop the mount resume; count only the retries
 
-    for (let i = 0; i < 8; i += 1) {
-      vi.advanceTimersByTime(8_000) // fire the scheduled retry (if any)
+    // 40 × 31s of fake time — each iteration outlasts the largest backoff
+    // delay (30s) so every re-armed timer actually fires; 12 attempts then
+    // exhaust the cap and arm the latch.
+    for (let i = 0; i < 40; i += 1) {
+      vi.advanceTimersByTime(31_000) // fire the scheduled retry (if any)
       rerender(<RouteResumeHarness {...props} resumeFailedSessionId={null} />) // cleared at entry
       rerender(<RouteResumeHarness {...props} resumeFailedSessionId="session-1" />) // re-armed on failure
     }
 
-    // Capped at MAX_RESUME_RETRIES (4): a persistently dead backend can't
-    // hot-loop the resume forever.
-    expect(resumeSession.mock.calls.length).toBe(4)
+    // Capped at MAX_RESUME_RETRIES (12): a persistently dead backend can't
+    // hot-loop the resume forever, while a slow cold backend still gets
+    // minutes of patient auto-recovery before the manual Retry appears.
+    expect(resumeSession.mock.calls.length).toBe(12)
 
     // Once auto-retry gives up, the exhausted latch is armed for the routed
     // session so the chat view can swap the perpetual loader for an explicit
@@ -659,16 +663,18 @@ describe('useRouteResume bounded auto-retry after a failed resume', () => {
     // Phase A — exhaust the bounded auto-retry (counter → MAX) like a dead
     // backend. The resumeExhaustedSessionId prop stays null here: the hook sets
     // the store, which doesn't feed back into the prop in this harness.
+    // 40 × 31s of fake time — each iteration outlasts the largest backoff
+    // delay (30s), so the full 12-attempt cycle exhausts and arms the latch.
     const { rerender } = render(<RouteResumeHarness {...props} resumeFailedSessionId="session-1" />)
     resumeSession.mockClear()
 
-    for (let i = 0; i < 8; i += 1) {
-      vi.advanceTimersByTime(8_000)
+    for (let i = 0; i < 40; i += 1) {
+      vi.advanceTimersByTime(31_000)
       rerender(<RouteResumeHarness {...props} resumeFailedSessionId={null} />)
       rerender(<RouteResumeHarness {...props} resumeFailedSessionId="session-1" />)
     }
 
-    expect(resumeSession.mock.calls.length).toBe(4) // capped
+    expect(resumeSession.mock.calls.length).toBe(12) // capped
     expect($resumeExhaustedSessionId.get()).toBe('session-1')
 
     // Phase B — user clicks Retry on the SAME stranded session. resumeSession

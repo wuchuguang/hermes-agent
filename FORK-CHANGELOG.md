@@ -47,6 +47,12 @@
 - **核心文件**：`agent/text_runtime_router.py` + `tests/agent/test_text_runtime_router.py`
 - **状态**：**未接入任何调用点**，merge 时可弃可留
 
+### 5. Desktop session-resume 耐心重试（bot 后端冷启动窗口）
+- **日期**: 2026-09-20
+- **需求**：桌面 bot 会话频繁弹「无法加载此会话…自动重试已停止」——resume 自动重试仅 4 次/1–8s 退避（~15s 放弃），而冷 bot 后端（spawn + 58 skills 加载）常超窗
+- **核心文件**：`apps/desktop/src/app/session/hooks/use-route-resume.ts` — MAX_RESUME_RETRIES 4→12、BASE 1s→2s、MAX 8s→30s（自动恢复窗口 ~15s → ~4.5min）
+- **测试**：`apps/desktop/src/app/session/hooks/use-route-resume.test.tsx`（17 passed；假时钟循环 8s→31s/轮适配新退避曲线）
+
 ## 重新二开操作要点
 
 1. projects.db schema（`hermes_cli/projects_db.py`）是上游代码，无需重写；重写的只是两个消费点（memory 锚点 + prompt 注入）

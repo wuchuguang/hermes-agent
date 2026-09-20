@@ -37,10 +37,13 @@ interface RouteResumeOptions {
 // (gateway RPC reject + REST fallback failure) on a transiently wedged backend —
 // dead provider key, a runaway turn hogging the dispatcher, flaky DNS. Without a
 // retry the loader latches forever. We retry with backoff, capped, so a
-// genuinely dead backend doesn't hot-loop the resume.
-const MAX_RESUME_RETRIES = 4
-const RESUME_RETRY_BASE_MS = 1_000
-const RESUME_RETRY_MAX_MS = 8_000
+// genuinely dead backend doesn't hot-loop the resume. The budget is generous —
+// a cold bot backend (profile skill load, model-provider probing) can take tens
+// of seconds to claim its sessions, and 30s+ of patient retrying beats throwing
+// the user at a manual Retry button.
+const MAX_RESUME_RETRIES = 12
+const RESUME_RETRY_BASE_MS = 2_000
+const RESUME_RETRY_MAX_MS = 30_000
 
 function resumeRetryDelayMs(attempt: number): number {
   return Math.min(RESUME_RETRY_MAX_MS, RESUME_RETRY_BASE_MS * 2 ** attempt)
