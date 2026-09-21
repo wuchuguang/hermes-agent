@@ -90,36 +90,48 @@ class TestLLMAdvisory:
         jev._cfg = lambda: {"enabled": True, "llm_advisory": False}
         assert jev.llm_advisory("bash", {"command": "rm backup.tar.gz"}) is None
 
-    def test_no_risk_signal_skips_model(self, jev, monkeypatch):
+    def test_no_api_key_fails_open(self, jev, monkeypatch):
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        assert jev.llm_advisory("bash", {"command": "rm backup.tar.gz"}) is None
+
+    def test_no_risk_signal_skips_api(self, jev, monkeypatch):
         calls = []
 
-        def fake_ask(prompt, timeout=3.0):
-            calls.append(prompt)
+        def fake_ask(command, tool_name, timeout=6.0):
+            calls.append(command)
 
-            return "RISKY"
+            return 0.9
 
-        monkeypatch.setattr(jev, "_ask_local", fake_ask)
+        monkeypatch.setattr(jev, "_ask_typesafe", fake_ask)
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test")
         assert jev.llm_advisory("bash", {"command": "echo hello"}) is None
         assert calls == []
 
-    def test_risky_signal_with_model_risky(self, jev, monkeypatch):
-        # Layer 2 ON for this test — the shared fixture keeps it off.
+    def test_typesafe_risky_flags_advisory(self, jev, monkeypatch):
         monkeypatch.setattr(jev, "_cfg", lambda: {"enabled": True, "llm_advisory": True})
 
-        def fake_ask(prompt, timeout=3.0):
-            return "RISKY"
+        def fake_ask(command, tool_name, timeout=6.0):
+            return 0.91
 
-        monkeypatch.setattr(jev, "_ask_local", fake_ask)
+        monkeypatch.setattr(jev, "_ask_typesafe", fake_ask)
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test")
         out = jev.llm_advisory("bash", {"command": "rm /srv/app/tmp.dump"})
-        assert out is not None and "qwen" in out
+        assert out is not None and "TypeSafe" in out and "91%" in out
 
-    def test_ollama_down_is_silent(self, jev, monkeypatch):
-        monkeypatch.setattr(jev, "_cfg", lambda: {"enabled": True, "llm_advisory": True})
+    def test_typesafe_low_prob_is_silent(self, jev, monkeypatch):
+        def fake_ask(command, tool_name, timeout=6.0):
+            return 0.05
 
-        def boom(prompt, timeout=3.0):
+        monkeypatch.setattr(jev, "_ask_typesafe", fake_ask)
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+        assert jev.llm_advisory("bash", {"command": "rm /tmp/build.lock"}) is None
+
+    def test_api_down_is_silent(self, jev, monkeypatch):
+        def boom(command, tool_name, timeout=6.0):
             raise OSError("connection refused")
 
-        monkeypatch.setattr(jev, "_ask_local", boom)
+        monkeypatch.setattr(jev, "_ask_typesafe", boom)
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test")
         assert jev.llm_advisory("bash", {"command": "rm /srv/app/tmp.dump"}) is None
 
 
