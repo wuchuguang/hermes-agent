@@ -12,6 +12,7 @@
 import { atom, host } from '@hermes/plugin-sdk'
 
 import { $botMeta, $lastRoster, botRosterKey } from './data'
+import { mergeGroupDigest } from './group-digest'
 import { groupMemberReferencesConnection, markOrphanedGroupMemberDescriptor } from './hygiene'
 import { getPluginCtx } from './shared'
 import type {
@@ -56,7 +57,10 @@ let groupChatSyncTimer: ReturnType<typeof setTimeout> | null = null
 /** One room inside the bounded ui_meta projection: a compacted log plus the
  *  identity fields, without any of `GroupChat`'s runtime/orchestration state. */
 interface GroupChatSyncRoom {
+  brief?: null | string
+  digest?: null | string
   image?: null | string
+  leaderKey?: null | string
   log: GroupMessage[]
   members?: GroupMember[]
   name?: string
@@ -279,6 +283,21 @@ export function groupChatSyncSnapshot(
         ? {
             image: room.image
           }
+        : {}),
+      ...(typeof room?.brief === 'string' && room.brief
+        ? {
+            brief: room.brief.slice(0, 512)
+          }
+        : {}),
+      ...(typeof room?.leaderKey === 'string' && room.leaderKey
+        ? {
+            leaderKey: room.leaderKey.slice(0, 160)
+          }
+        : {}),
+      ...(typeof room?.digest === 'string' && room.digest
+        ? {
+            digest: room.digest.slice(0, 2048)
+          }
         : {})
     }
 
@@ -427,8 +446,9 @@ export function mergeGroupChatSyncSnapshots(
       entries.set(groupChatSyncEntryKey(entry), entry)
     }
 
-    // Identity fields (display name, membership, picture) follow the higher
-    // revision; a tie unions members and prefers the local writer's fields.
+    // Identity fields (display name, membership, picture, project brief,
+    // leader, digest) follow the higher revision; a tie unions members and
+    // prefers the local writer's fields.
     let identity: GroupChatSyncRoom | undefined
     let members: GroupMember[]
     let image: null | string | undefined
@@ -453,6 +473,13 @@ export function mergeGroupChatSyncSnapshots(
       image = Object.prototype.hasOwnProperty.call(localRoom || {}, 'image') ? localRoom.image : remoteRoom?.image
     }
 
+    // Project-space fields ride the identity revision (single writer: whoever
+    // edited the brief/leader/digest bumped the room revision), so no
+    // per-field merge table — the rev winner's values win whole.
+    const brief = identity?.brief ?? null
+    const leaderKey = identity?.leaderKey ?? null
+    const digest = identity?.digest ?? null
+
     rooms[key] = {
       ...(identity?.name
         ? {
@@ -474,6 +501,21 @@ export function mergeGroupChatSyncSnapshots(
       ...(typeof image === 'string' && image
         ? {
             image
+          }
+        : {}),
+      ...(brief
+        ? {
+            brief
+          }
+        : {}),
+      ...(leaderKey
+        ? {
+            leaderKey
+          }
+        : {}),
+      ...(digest
+        ? {
+            digest
           }
         : {})
     }
@@ -749,6 +791,9 @@ export function durableGroupChatRooms(all: Record<string, GroupChat> = $groupCha
       // already carries.
       roomId: typeof room.roomId === 'string' && room.roomId ? room.roomId : null,
       image: room.image || null,
+      brief: typeof room.brief === 'string' && room.brief ? room.brief : null,
+      leaderKey: typeof room.leaderKey === 'string' && room.leaderKey ? room.leaderKey : null,
+      digest: typeof room.digest === 'string' && room.digest ? room.digest : null,
       rosterOrder: room.rosterOrder,
       pinned: room.pinned,
       syncRevision: Math.max(0, Number(room.syncRevision || 0))
@@ -1313,6 +1358,15 @@ export function updateGroupChat(
   })
 
   const bounded = trimGroupChatLog(next.log, next.watermarks)
+
+  if (bounded.log.length < next.log.length) {
+    // Entries are leaving the retained window — fold them into the room's
+    // rolling digest FIRST so long projects never lose their conclusions.
+    const outgoing = next.log.slice(0, next.log.length - bounded.log.length)
+
+    next.digest = mergeGroupDigest(next.digest, outgoing) || null
+  }
+
   next.log = bounded.log
   next.watermarks = bounded.watermarks
   all[group] = next
@@ -1350,6 +1404,10 @@ export function updateGroupChat(
         roomId: typeof room.roomId === 'string' && room.roomId ? room.roomId : null,
         // Room picture (small data URL, same normalization as bot avatars).
         image: room.image || null,
+        // Project space: goal statement, PM member, rolling memory.
+        brief: typeof room.brief === 'string' && room.brief ? room.brief : null,
+        leaderKey: typeof room.leaderKey === 'string' && room.leaderKey ? room.leaderKey : null,
+        digest: typeof room.digest === 'string' && room.digest ? room.digest : null,
         rosterOrder: room.rosterOrder,
         pinned: room.pinned,
         syncRevision: Math.max(0, Number(room.syncRevision || 0))
@@ -1392,6 +1450,26 @@ export interface GroupChatRoom extends GroupChat {
 export function setGroupChatImage(group: string, image: null | string | undefined) {
   updateGroupChat(group, (room: GroupChatRoom) => {
     room.image = image || null
+
+    return room
+  })
+}
+
+/** Set or clear the room's project goal statement. Persists and syncs with
+ *  the room record like the picture. */
+export function setGroupChatBrief(group: string, brief: null | string | undefined) {
+  updateGroupChat(group, (room: GroupChatRoom) => {
+    room.brief = brief ? String(brief).slice(0, 512) : null
+
+    return room
+  })
+}
+
+/** Reassign the room's PM bot (a member key from `groupMemberKey`). A null
+ *  leader returns the room to round-robin with no PM rules. */
+export function setGroupChatLeader(group: string, leaderKey: null | string | undefined) {
+  updateGroupChat(group, (room: GroupChatRoom) => {
+    room.leaderKey = leaderKey || null
 
     return room
   })

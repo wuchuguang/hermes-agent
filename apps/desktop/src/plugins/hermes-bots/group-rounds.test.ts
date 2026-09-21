@@ -418,7 +418,8 @@ describe('turn prompt', () => {
       viewer: { name: 'default', title: '' }
     })
 
-    expect(own).toMatch(/You are @hermes,/)
+    expect(own).toMatch(/You are @hermes\./)
+    expect(own).toMatch(/one participant in a group chat with @builder/)
     expect(own).not.toMatch(/@default\b/)
 
     const peer = buildGroupChatTurnPrompt({

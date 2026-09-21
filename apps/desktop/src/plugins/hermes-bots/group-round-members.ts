@@ -93,7 +93,10 @@ function prepareGroupRoundMember(context: GroupRoundMemberContext, member: Group
     groupName: context.group,
     members,
     viewer: member,
-    deltaLines: delta.slice(-GROUP_CHAT_HISTORY_LIMIT).map((e: GroupMessage) => formatGroupChatLine(e, member))
+    deltaLines: delta.slice(-GROUP_CHAT_HISTORY_LIMIT).map((e: GroupMessage) => formatGroupChatLine(e, member)),
+    brief: room.brief || '',
+    digest: room.digest || '',
+    leaderKey: room.leaderKey || ''
   })
 
   // Images riding this delta (user attachments — member entries don't

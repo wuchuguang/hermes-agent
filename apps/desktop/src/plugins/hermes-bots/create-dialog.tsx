@@ -48,6 +48,7 @@ import { labeled, ResizableFrame } from './dialog-parts'
 import { GROUP_CHAT_MAX_MEMBERS, mintGroupRoomId, uniqueGroupChatName, updateGroupChat } from './group-chat'
 import type { GroupChatRoom } from './group-chat'
 import { GroupImageControls } from './group-chat-parts'
+import { groupMemberKey } from './group-membership'
 import {
   botGroups,
   durableGroupChatMembers,
@@ -1132,6 +1133,10 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [name, setName] = useState('')
   const [image, setImage] = useState<null | string>(null)
+  // Project space: who leads the room (defaults to the first member once two
+  // are picked) and what the room is for.
+  const [leaderKey, setLeaderKey] = useState<null | string>(null)
+  const [brief, setBrief] = useState('')
 
   // Reset per open so a cancelled draft doesn't leak into the next one.
   useEffect(() => {
@@ -1140,6 +1145,8 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
       setChecked({})
       setName('')
       setImage(null)
+      setLeaderKey(null)
+      setBrief('')
     }
   }, [open])
 
@@ -1149,6 +1156,8 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
   const selected = selectableRoster.filter(bot => checked[botRosterKey(bot)])
   const visible: RosterRow[] = filterBots(selectableRoster, allMeta, query)
   const atCap = selected.length >= GROUP_CHAT_MAX_MEMBERS
+  // The effective leader: the explicit pick, or the first selected member.
+  const effectiveLeaderKey = leaderKey ?? (selected.length ? groupMemberKey(durableGroupChatMembers([selected[0]])[0]) : null)
 
   const placeholder = selected.length
     ? selected.map(bot => displayName(bot, botRosterMeta(bot, allMeta))).join(', ')
@@ -1193,6 +1202,9 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
     updateGroupChat(groupName, (room: GroupChatRoom) => {
       room.members = roomMembers
       room.roomId = roomId
+      // Project space: the picked leader (default first member) + the goal.
+      room.leaderKey = leaderKey ?? groupMemberKey(roomMembers[0])
+      room.brief = brief.trim() ? brief.trim().slice(0, 512) : null
 
       if (image) {
         room.image = image
@@ -1235,27 +1247,38 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
         />
         {selected.length ? (
           <div className="flex flex-wrap gap-1">
-            {selected.map(bot => (
-              <Badge
-                asChild
-                className="rounded-full bg-(--chrome-action-hover) pl-2 pr-1.5 text-[0.6875rem] text-(--ui-text-secondary) transition-colors hover:text-foreground"
-                key={botRosterKey(bot)}
-                variant="muted"
-              >
-                <RowButton
-                  onClick={() =>
-                    setChecked(prev => ({
-                      ...prev,
-                      [botRosterKey(bot)]: false
-                    }))
-                  }
-                  title={b.group.removeFromSelection}
+            {selected.map(bot => {
+              const botKey = groupMemberKey(durableGroupChatMembers([bot])[0])
+              const isLeader = (leaderKey ?? groupMemberKey(durableGroupChatMembers([selected[0]])[0])) === botKey
+
+              return (
+                <Badge
+                  asChild
+                  className={cn(
+                    'rounded-full pl-2 pr-1.5 text-[0.6875rem] transition-colors',
+                    isLeader
+                      ? 'bg-(--chrome-action-active) text-foreground'
+                      : 'bg-(--chrome-action-hover) text-(--ui-text-secondary) hover:text-foreground'
+                  )}
+                  key={botRosterKey(bot)}
+                  variant="muted"
                 >
-                  {displayName(bot, botRosterMeta(bot, allMeta))}
-                  <Codicon className="text-[0.6rem]" name="close" />
-                </RowButton>
-              </Badge>
-            ))}
+                  <RowButton
+                    onClick={() =>
+                      setChecked(prev => ({
+                        ...prev,
+                        [botRosterKey(bot)]: false
+                      }))
+                    }
+                    title={b.group.removeFromSelection}
+                  >
+                    {isLeader ? '👑 ' : ''}
+                    {displayName(bot, botRosterMeta(bot, allMeta))}
+                    <Codicon className="text-[0.6rem]" name="close" />
+                  </RowButton>
+                </Badge>
+              )
+            })}
           </div>
         ) : null}
         <div className="max-h-64 min-h-0 overflow-y-auto overscroll-contain">
@@ -1304,6 +1327,23 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
                         }))
                       }
                     />
+                    {isChecked ? (
+                      <button
+                        aria-label={b.group.makeLeader}
+                        aria-pressed={effectiveLeaderKey === groupMemberKey(durableGroupChatMembers([bot])[0])}
+                        className={cn(
+                          'shrink-0 rounded p-0.5 text-sm transition-colors',
+                          effectiveLeaderKey === groupMemberKey(durableGroupChatMembers([bot])[0])
+                            ? 'text-foreground'
+                            : 'opacity-30 hover:opacity-80'
+                        )}
+                        onClick={() => setLeaderKey(groupMemberKey(durableGroupChatMembers([bot])[0]))}
+                        title={b.group.makeLeader}
+                        type="button"
+                      >
+                        👑
+                      </button>
+                    ) : null}
                   </label>
                 )
               })
@@ -1335,6 +1375,13 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
               value={name}
             />
           </form>
+          <Input
+            aria-label={b.group.briefLabel}
+            maxLength={512}
+            onChange={event => setBrief(event.target.value)}
+            placeholder={b.group.briefPlaceholder}
+            value={brief}
+          />
         </div>
         <DialogFooter>
           <Button onClick={onClose} variant="secondary">

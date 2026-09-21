@@ -68,6 +68,12 @@ function isGroupChatSelf(from: GroupMessageAuthor, viewer: GroupChatLineViewer):
 
 interface GroupChatTurnPromptInput {
   deltaLines: string[]
+  /** Rolling summary of log entries that left the retained window ('' = none). */
+  digest?: null | string
+  /** The room's project goal statement ('' = unset). */
+  brief?: null | string
+  /** The PM bot's member key, when the room has one ('' = leaderless). */
+  leaderKey?: null | string
   groupName: string
   members: GroupMember[]
   viewer: GroupMember
@@ -76,7 +82,15 @@ interface GroupChatTurnPromptInput {
 /** The full per-turn payload for one member: participation rules + the room
  *  delta. Rules travel in the turn payload (not SOUL) so every existing bot
  *  can join a group chat without a profile migration. */
-export function buildGroupChatTurnPrompt({ groupName, members, viewer, deltaLines }: GroupChatTurnPromptInput) {
+export function buildGroupChatTurnPrompt({
+  groupName,
+  members,
+  viewer,
+  deltaLines,
+  digest,
+  brief,
+  leaderKey
+}: GroupChatTurnPromptInput) {
   const viewerKey = groupMemberKey(viewer)
   const peers = members.filter(m => groupMemberKey(m) !== viewerKey)
 
@@ -88,9 +102,35 @@ export function buildGroupChatTurnPrompt({ groupName, members, viewer, deltaLine
     })
     .join(', ')
 
-  return [
-    `[Group chat: "${groupName}"] You are @${botHandle(viewer.name, viewer)}, one participant in a group chat with ${peerNames || 'no one else yet'} and the user.`,
-    '',
+  const isLeader = Boolean(leaderKey) && leaderKey === viewerKey
+
+  // Project framing: what this room is FOR, and what the viewer's role in it
+  // is. A leaderless room keeps the old plain-participant framing.
+  const framing: string[] = [`[Group chat: "${groupName}"] You are @${botHandle(viewer.name, viewer)}.`]
+
+  if (brief) {
+    framing.push(`Project goal: ${brief}`)
+  }
+
+  if (isLeader) {
+    framing.push(
+      `You are the PROJECT LEADER of this group${peers.length ? ` — your team: ${peerNames}` : ''}. You own the outcome: break assignments into concrete pieces, hand each piece to the right teammate with @name, track what comes back, chase what stalls, and report progress to @user. When a teammate delivers, acknowledge it and state what is done vs still open.`
+    )
+  } else {
+    framing.push(
+      `You are one participant in a group chat with ${peerNames || 'no one else yet'} and the user.${leaderKey ? ' The project leader sets and tracks the work — take assignments from the leader, deliver results back to the room, and route scope questions to the leader.' : ''}`
+    )
+  }
+
+  const sections: string[] = [...framing, '']
+
+  // Rolling memory: conclusions from before the retained window, so a long
+  // project never starts every turn from amnesia. Present, then delta.
+  if (digest) {
+    sections.push('Context from earlier in this project (summary of messages that have scrolled out of the room):', ...digest.split('\n').map(line => `  ${line}`), '')
+  }
+
+  sections.push(
     'New messages in the room since your last turn (oldest first):',
     ...deltaLines.map(line => `  ${line}`),
     '',
@@ -99,5 +139,8 @@ export function buildGroupChatTurnPrompt({ groupName, members, viewer, deltaLine
     '- If you have nothing new to add, reply with exactly "(pass)". Passing is good — it lets the conversation settle.',
     '- Mention a teammate as @name to pull them in; mention @user only for a judgment call or a result the user needs. Do not repeat points already made.',
     '- Never reveal content from your private 1:1 chats. Your reply text goes to the room verbatim — no preamble, no meta-commentary.'
-  ].join('\n')
+  )
+
+  return sections.join('\n')
 }
+

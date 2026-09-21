@@ -214,6 +214,11 @@ type BotsMessages = {
     wantsToRunCommand: (handle: string) => string
     asks: (handle: string) => string
     answerTo: (member: string) => string
+    /** Project space: the PM crown button + the goal input. */
+    makeLeader: string
+    briefLabel: string
+    briefPlaceholder: string
+    leaderTag: (name: string) => string
   }
   /** Skills hub + MCP setup surfaces embedded in the bot editor. */
   tools: {
@@ -449,7 +454,11 @@ const en: BotsMessages = {
     answerFailed: (handle, error) => `Could not send the answer to @${handle}: ${error}`,
     wantsToRunCommand: handle => `@${handle} wants to run a command:`,
     asks: handle => `@${handle} asks:`,
-    answerTo: member => `Answer @${member}`
+    answerTo: member => `Answer @${member}`,
+    makeLeader: 'Make project leader',
+    briefLabel: 'Project goal',
+    briefPlaceholder: 'What is this group trying to accomplish? (e.g. Ship the checkout redesign)',
+    leaderTag: name => `${name} (leader)`
   },
   tools: {
     skillsHub: 'Hermes Skills Hub',
@@ -679,7 +688,11 @@ const ja: BotsMessages = {
     answerFailed: (handle, error) => `@${handle}に回答を送信できませんでした: ${error}`,
     wantsToRunCommand: handle => `@${handle}がコマンドを実行しようとしています:`,
     asks: handle => `@${handle}からの質問:`,
-    answerTo: member => `@${member}に回答`
+    answerTo: member => `@${member}に回答`,
+    makeLeader: 'プロジェクトリーダーにする',
+    briefLabel: 'プロジェクト目標',
+    briefPlaceholder: 'このグループの目的は何ですか？',
+    leaderTag: name => `${name}（リーダー）`
   },
   tools: {
     skillsHub: 'Hermes スキルハブ',
@@ -904,7 +917,11 @@ const zh: BotsMessages = {
     answerFailed: (handle, error) => `无法将回答发送给 @${handle}：${error}`,
     wantsToRunCommand: handle => `@${handle} 想执行一个命令：`,
     asks: handle => `@${handle} 的提问：`,
-    answerTo: member => `回答 @${member}`
+    answerTo: member => `回答 @${member}`,
+    makeLeader: '设为项目负责人',
+    briefLabel: '项目目标',
+    briefPlaceholder: '这个群要共同完成什么？（如：完成结算页改版）',
+    leaderTag: name => `${name}（负责人）`
   },
   tools: {
     skillsHub: 'Hermes 技能中心',
@@ -1129,7 +1146,11 @@ const zhHant: BotsMessages = {
     answerFailed: (handle, error) => `無法將回答傳送給 @${handle}：${error}`,
     wantsToRunCommand: handle => `@${handle} 想執行一個命令：`,
     asks: handle => `@${handle} 的提問：`,
-    answerTo: member => `回覆 @${member}`
+    answerTo: member => `回覆 @${member}`,
+    makeLeader: '設為專案負責人',
+    briefLabel: '專案目標',
+    briefPlaceholder: '這個群要共同完成什麼？',
+    leaderTag: name => `${name}（負責人）`
   },
   tools: {
     skillsHub: 'Hermes 技能中心',

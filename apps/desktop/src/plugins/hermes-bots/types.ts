@@ -167,6 +167,15 @@ export interface GroupChat {
   /** Immutable identity, so a rename doesn't fork the room. */
   roomId?: null | string
   running?: boolean
+  /** Project space: the room's goal statement, injected into every member's
+   *  turn prompt so roles stay anchored to the project as the log churns. */
+  brief?: null | string
+  /** Project space: the member key of the room's PM bot. `@leader` routes
+   *  task assignments there; its turn prompt carries the PM rules. */
+  leaderKey?: null | string
+  /** Project space: rolling summary of the parts of the log that fell out of
+   *  the retained window, so a long project never loses its conclusions. */
+  digest?: null | string
   /** The immutable owner descriptor captured beside each plumbing session,
    *  keyed the same way as `sessions`. Partial: legacy records hold a bare
    *  `{ name }`, and the sweep re-validates the route before trusting one. */

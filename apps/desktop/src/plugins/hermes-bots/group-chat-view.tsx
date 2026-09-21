@@ -65,7 +65,9 @@ import {
   $groupNeedsYou,
   groupThreadOf,
   scheduleGroupChatServerSync,
+  setGroupChatBrief,
   setGroupChatImage,
+  setGroupChatLeader,
   updateGroupChat
 } from './group-chat'
 import type { GroupChatRoom } from './group-chat'
@@ -76,6 +78,7 @@ import {
   botGroups,
   groupChatMemberBots,
   groupDisbandMetadataPlan,
+  groupMemberKey,
   groupWorkspaceOwnerKey,
   liveGroupChatNames
 } from './group-membership'
@@ -367,12 +370,18 @@ function GroupChatSettingsDialog({ group, members, open, onClose, onRenamed }: G
   const b = useBots()
   const rooms: Record<string, GroupChatRoom> = useValue($groupChats)
   const current = (rooms[group] || {}).image || null
+  const currentBrief = (rooms[group] || {}).brief || ''
+  const currentLeaderKey = (rooms[group] || {}).leaderKey || null
   const [name, setName] = useState(group)
   const [image, setImage] = useState(current)
+  const [brief, setBrief] = useState(currentBrief)
+  const [leaderKey, setLeaderKey] = useState<null | string>(currentLeaderKey)
   useEffect(() => {
     if (open) {
       setName(group)
       setImage(current)
+      setBrief(currentBrief)
+      setLeaderKey(currentLeaderKey)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, group])
@@ -386,6 +395,14 @@ function GroupChatSettingsDialog({ group, members, open, onClose, onRenamed }: G
 
     if (image !== current) {
       setGroupChatImage(finalName, image)
+    }
+
+    if (brief !== currentBrief) {
+      setGroupChatBrief(finalName, brief)
+    }
+
+    if (leaderKey !== currentLeaderKey) {
+      setGroupChatLeader(finalName, leaderKey)
     }
 
     onClose()
@@ -429,6 +446,41 @@ function GroupChatSettingsDialog({ group, members, open, onClose, onRenamed }: G
             value={name}
           />
         </form>
+        <Input
+          aria-label={b.group.briefLabel}
+          maxLength={512}
+          onChange={event => setBrief(event.target.value)}
+          placeholder={b.group.briefPlaceholder}
+          value={brief}
+        />
+        {members && members.length ? (
+          <div>
+            <div className="mb-1 text-[0.6875rem] text-(--ui-text-tertiary)">{b.group.makeLeader}</div>
+            <div className="flex flex-wrap gap-1">
+              {members.map(member => {
+                const key = groupMemberKey(member)
+                const isLeader = leaderKey === key
+
+                return (
+                  <button
+                    className={cn(
+                      'rounded-full px-2 py-0.5 text-[0.6875rem] transition-colors',
+                      isLeader
+                        ? 'bg-(--chrome-action-active) text-foreground'
+                        : 'bg-(--chrome-action-hover) text-(--ui-text-secondary) hover:text-foreground'
+                    )}
+                    key={key}
+                    onClick={() => setLeaderKey(key)}
+                    type="button"
+                  >
+                    {isLeader ? '👑 ' : ''}
+                    {displayName(member, botRosterMeta(member, $botMeta.get()))}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ) : null}
         <DialogFooter>
           <Button onClick={onClose} variant="secondary">
             {t.common.cancel}
@@ -957,6 +1009,8 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
     const appearance = isUser ? null : botAppearance(entry.from.name, meta)
     const image = appearance?.image ?? null
     const photo = Boolean(image && !isBackfilledFacePng(image))
+    // The room's PM bot gets a crown beside every line it speaks.
+    const isLeaderSpeaker = Boolean(room?.leaderKey) && member ? room.leaderKey === groupMemberKey(member) : false
 
     return (
       <div
@@ -989,6 +1043,7 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
                 title={revealed ? 'Hide full handle' : 'Show full handle'}
                 variant="text"
               >
+                {isLeaderSpeaker ? '👑 ' : ''}
                 {label}
               </Button>
             )}

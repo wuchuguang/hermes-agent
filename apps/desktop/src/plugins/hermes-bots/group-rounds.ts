@@ -108,7 +108,7 @@ export function parseGroupChatMentions(text: unknown, members: GroupMember[]) {
  *  @-mentioned in messages since the last user entry (or @everyone appears),
  *  otherwise only the mentioned members. Recomputed every round so a member
  *  pulled in mid-conversation joins the next round. */
-export function resolveGroupResponders(log: GroupMessage[], members: GroupMember[]) {
+export function resolveGroupResponders(log: GroupMessage[], members: GroupMember[], leaderKey?: null | string) {
   let sinceLastUser: GroupMessage[] = []
 
   for (let i = log.length - 1; i >= 0; i--) {
@@ -138,7 +138,19 @@ export function resolveGroupResponders(log: GroupMessage[], members: GroupMember
     return members
   }
 
-  return members.filter(member => mentioned.has(groupMemberKey(member)))
+  const responders = members.filter(member => mentioned.has(groupMemberKey(member)))
+
+  // Project space: the leader always hears the room — it owns the outcome,
+  // and missing an assignment made to a teammate would blind its tracking.
+  if (leaderKey && !mentioned.has(leaderKey)) {
+    const leader = members.find(member => groupMemberKey(member) === leaderKey)
+
+    if (leader) {
+      responders.push(leader)
+    }
+  }
+
+  return responders
 }
 
 /** Rotate the roster so a different member leads each round. */
@@ -484,9 +496,10 @@ export async function runGroupChatRounds(group: string, members: GroupMember[], 
       // {before, thread} post-thread.
       const strandedNow = ($groupChats.get()[group] || {}).stranded || {}
 
-      const responders = rotateGroupSpeakers(resolveGroupResponders(roomLog, members), round).filter(
-        (member: GroupMember) => !Object.prototype.hasOwnProperty.call(strandedNow, groupMemberKey(member))
-      )
+      const responders = rotateGroupSpeakers(
+        resolveGroupResponders(roomLog, members, ($groupChats.get()[group] || {}).leaderKey || null),
+        round
+      ).filter((member: GroupMember) => !Object.prototype.hasOwnProperty.call(strandedNow, groupMemberKey(member)))
 
       let spokeThisRound = 0
 
