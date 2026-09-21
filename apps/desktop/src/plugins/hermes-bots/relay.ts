@@ -10,6 +10,7 @@
 import { host, LruCache } from '@hermes/plugin-sdk'
 
 import { botHandle, clearBotAttention, noteBotAttention } from './data'
+import { beginRelayTurn, settleRelayTurnDone, settleRelayTurnFailed } from './relay-turns'
 import type { ProfileRoute, RosterRow } from './types'
 
 // ── cross-connection bot relay ────────────────────────────────────────────
@@ -394,6 +395,14 @@ async function drainRelayOutboxes() {
         // Needs-attention hook (#93091 item 3): a delivered background DM is
         // this bot's "good turn"; a classified delivery failure badges it.
         const attentionKey = `${target.id}::${String(envelope?.target_profile || '')}`
+        // Progress surface: this deliver call IS one cross-bot turn.
+        beginRelayTurn({
+          connectionId: target.id,
+          envelopeId,
+          fromProfile: String(envelope?.from_profile || ''),
+          message: String(envelope?.message || ''),
+          targetProfile: String(envelope?.target_profile || '')
+        })
 
         try {
           const res = await host.requestProfile<{ reply?: string }>(
@@ -410,6 +419,7 @@ async function drainRelayOutboxes() {
           )
 
           clearBotAttention(attentionKey)
+          settleRelayTurnDone(envelopeId)
           await postReply({
             reply: String(res?.reply || '')
           })
@@ -421,6 +431,7 @@ async function drainRelayOutboxes() {
           // classified codes beat free-text re-parsing.
           const reason = String(error?.data?.reason || '').trim()
           noteBotAttention(attentionKey, reason || error?.message || error)
+          settleRelayTurnFailed(envelopeId, reason || undefined)
           await postReply({
             error: String(error?.message || error || 'delivery failed'),
             ...(reason

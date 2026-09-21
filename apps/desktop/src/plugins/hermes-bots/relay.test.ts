@@ -44,7 +44,13 @@ const { clearBotAttentionMock, hostMock, noteBotAttentionMock, UnboundedCache } 
   }
 }))
 
-vi.mock('@hermes/plugin-sdk', () => ({ host: hostMock, LruCache: UnboundedCache }))
+// relay.ts now imports ./relay-turns for the progress store, whose module
+// scope calls atom() — the mock must provide the real nanostores atom.
+vi.mock('@hermes/plugin-sdk', async () => {
+  const nanostores = await import('nanostores')
+
+  return { host: hostMock, LruCache: UnboundedCache, atom: nanostores.atom }
+})
 
 vi.mock('./data', () => ({
   botHandle: (name: string) => (name === 'default' ? 'hermes' : name),

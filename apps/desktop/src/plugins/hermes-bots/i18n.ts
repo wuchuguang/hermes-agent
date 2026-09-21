@@ -265,6 +265,17 @@ type BotsMessages = {
     runsRaw: string
     timesTotal: (count: number) => string
   }
+  /** Cross-connection bot turn progress (the statusbar relay pill). */
+  relay: {
+    pillRunning: (count: number) => string
+    pillFinished: (count: number) => string
+    popoverTitle: (running: number, total: number) => string
+    turnRowTitle: (target: string, from: string) => string
+    phaseDelivering: (seconds: number) => string
+    phaseDone: string
+    phaseFailed: (reason?: string) => string
+    dismiss: string
+  }
 }
 
 const en: BotsMessages = {
@@ -484,6 +495,17 @@ const en: BotsMessages = {
     runsInterval: (count, unit) => `Runs every ${count} ${unit}`,
     runsRaw: 'Raw schedule — every Nm/Nh/Nd or 5-field cron',
     timesTotal: count => `, ${count} time(s) total`
+  },
+  relay: {
+    pillRunning: count => `Bot work · ${count} running`,
+    pillFinished: count => `Bot work · ${count} finished`,
+    popoverTitle: (running, total) =>
+      running > 0 ? `Cross-bot tasks — ${running} running` : `Cross-bot tasks — ${total} finished`,
+    turnRowTitle: (target, from) => `${target} ← ${from}`,
+    phaseDelivering: seconds => `working · ${seconds}s`,
+    phaseDone: 'done',
+    phaseFailed: reason => (reason ? `failed · ${reason}` : 'failed'),
+    dismiss: 'Dismiss'
   }
 }
 
@@ -703,6 +725,17 @@ const ja: BotsMessages = {
     runsInterval: (count, unit) => `${count}${unit}ごとに実行します`,
     runsRaw: '生のスケジュール — Nm/Nh/Nd または5フィールドのcron',
     timesTotal: count => `、合計${count}回`
+  },
+  relay: {
+    pillRunning: count => `ボット作業 · ${count}件実行中`,
+    pillFinished: count => `ボット作業 · ${count}件完了`,
+    popoverTitle: (running, total) =>
+      running > 0 ? `ボット間タスク — ${running}件実行中` : `ボット間タスク — ${total}件完了`,
+    turnRowTitle: (target, from) => `${target} ← ${from}`,
+    phaseDelivering: seconds => `実行中 · ${seconds}秒`,
+    phaseDone: '完了',
+    phaseFailed: reason => (reason ? `失敗 · ${reason}` : '失敗'),
+    dismiss: '閉じる'
   }
 }
 
@@ -917,6 +950,17 @@ const zh: BotsMessages = {
     runsInterval: (count, unit) => `每 ${count} ${unit}运行`,
     runsRaw: '原始计划 — every Nm/Nh/Nd 或 5 段 cron',
     timesTotal: count => `，共 ${count} 次`
+  },
+  relay: {
+    pillRunning: count => `Bot 任务 · ${count} 个进行中`,
+    pillFinished: count => `Bot 任务 · ${count} 个已完成`,
+    popoverTitle: (running, total) =>
+      running > 0 ? `跨 Bot 任务 — ${running} 个进行中` : `跨 Bot 任务 — ${total} 个已完成`,
+    turnRowTitle: (target, from) => `${target} ← ${from}`,
+    phaseDelivering: seconds => `执行中 · ${seconds} 秒`,
+    phaseDone: '已完成',
+    phaseFailed: reason => (reason ? `失败 · ${reason}` : '失败'),
+    dismiss: '关闭'
   }
 }
 
@@ -1131,6 +1175,17 @@ const zhHant: BotsMessages = {
     runsInterval: (count, unit) => `每 ${count} ${unit}執行`,
     runsRaw: '原始排程 — every Nm/Nh/Nd 或 5 段 cron',
     timesTotal: count => `，共 ${count} 次`
+  },
+  relay: {
+    pillRunning: count => `Bot 任務 · ${count} 個進行中`,
+    pillFinished: count => `Bot 任務 · ${count} 個已完成`,
+    popoverTitle: (running, total) =>
+      running > 0 ? `跨 Bot 任務 — ${running} 個進行中` : `跨 Bot 任務 — ${total} 個已完成`,
+    turnRowTitle: (target, from) => `${target} ← ${from}`,
+    phaseDelivering: seconds => `執行中 · ${seconds} 秒`,
+    phaseDone: '已完成',
+    phaseFailed: reason => (reason ? `失敗 · ${reason}` : '失敗'),
+    dismiss: '關閉'
   }
 }
 

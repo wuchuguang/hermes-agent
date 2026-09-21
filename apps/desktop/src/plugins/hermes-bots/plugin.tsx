@@ -60,6 +60,7 @@ import { annotateOrphanedGroupChatMembers } from './hygiene'
 import { BOTS_LOCALES } from './i18n'
 import { displayName } from './labels'
 import { startBotRelay, stopBotRelay } from './relay'
+import { RelayTurnsPill } from './relay-turns-pill'
 import { $activityToasts } from './roster-actions'
 import {
   botChatOwnsWorkspace,
@@ -106,6 +107,15 @@ export default {
     // The cross-connection relay rides every gateway socket this Desktop
     // holds: roster sync + envelope drain/deliver/reply loops.
     startBotRelay()
+
+    // Relay progress pill — the statusbar's cross-bot work indicator. A
+    // render() contribution owns its own store subscription; hidden while
+    // no turns are tracked, so it costs nothing when Bot Mode is idle.
+    ctx.register({
+      area: 'statusBar.right',
+      id: 'relay-turns-pill',
+      render: () => <RelayTurnsPill />
+    })
 
     // Disabling the plugin (or a hot reload) must actually stop the clock —
     // before this, the rAF loop + 1Hz document scan ran until app restart.
