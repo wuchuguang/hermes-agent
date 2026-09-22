@@ -1,6 +1,7 @@
 """Tests for the dangerous command approval module."""
 
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -37,16 +38,14 @@ class TestApprovalModeParsing:
 
 
 class TestSmartApproval:
-    def test_smart_approval_uses_call_llm(self):
-        response = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="APPROVE"))]
-        )
-        with mock_patch("agent.auxiliary_client.call_llm", return_value=response) as mock_call:
-            result = _smart_approve("python -c \"print('hello')\"", "script execution via -c flag")
-
+    def test_smart_approval_uses_jev_layers(self, monkeypatch):
+        """Fork: the smart guardian is jev (L1 rules + L2 TypeSafe), not an
+        auxiliary LLM. A benign command with no risk signals auto-approves
+        WITHOUT any network call."""
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(approval_smart, "_operator_policy_deny", lambda cmd: None)
+        result = _smart_approve("python -c \"print('hello')\"", "script execution via -c flag")
         assert result == "approve"
-        assert mock_call.call_args.kwargs["task"] == "approval"
-        assert mock_call.call_args.kwargs["temperature"] == 0
 
     def test_smart_approval_does_not_allowlist_the_pattern_for_session(self, monkeypatch):
         session_key = "test-smart-per-command"
@@ -94,9 +93,14 @@ class TestDetectDangerousRm:
 
 
     def test_nonrecursive_verification_artifact_cleanup_is_not_dangerous(self):
-        with mock_patch("tempfile.gettempdir", return_value="/tmp"):
+        # Host-honest temp dir: on macOS /tmp is a symlink to /private/tmp, so
+        # a literal "/tmp" mock never round-trips through realpath. Use the
+        # OS's real temp dir and build commands from it (matching the symlink
+        # test below), keeping the exemption semantics identical on both OSes.
+        real_tmp = os.path.realpath(tempfile.gettempdir())
+        with mock_patch("tempfile.gettempdir", return_value=real_tmp):
             for prefix in ("hermes-verify-", "hermes-ad-hoc-"):
-                assert detect_dangerous_command(f"rm -f /tmp/{prefix}example.py") == (
+                assert detect_dangerous_command(f"rm -f {real_tmp}/{prefix}example.py") == (
                     False,
                     None,
                     None,

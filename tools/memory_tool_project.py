@@ -165,6 +165,34 @@ def _project_root_for_session() -> Optional[Path]:
 
 
 
+def _primary_root_for_session(start: Path) -> Optional[Path]:
+    """Primary folder of the first-class Project owning *start*, or None.
+
+    Looks up projects.db (``hermes project`` workspaces). ``start`` must be a
+    resolved directory. Returns the project's primary path when it exists on
+    disk; never raises — callers fall back to the plain git root on any error.
+    """
+    try:
+        from hermes_cli.projects_db import connect_closing, project_for_path
+
+        with connect_closing() as conn:
+            project = project_for_path(conn, str(start))
+        if project is None:
+            return None
+        primary = project.primary_path
+        if not primary:
+            return None
+        primary_path = Path(primary).expanduser()
+        if primary_path.is_dir():
+            try:
+                return primary_path.resolve()
+            except OSError:
+                return primary_path
+        return None
+    except Exception:
+        return None
+
+
 def _is_install_tree_safe(path: Path) -> bool:
     try:
         from agent.runtime_cwd import _is_install_tree

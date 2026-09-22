@@ -196,7 +196,7 @@ class TestSmartModeFiresHooks:
         pre, post = (kwargs for _, kwargs in captured)
         assert pre["surface"] == post["surface"] == "smart"
         assert post["choice"] == choice
-        assert post["decided_by"] == "aux_llm"
+        assert post["decided_by"] == "jev"
         assert pre["session_key"] == post["session_key"] == isolated_session
         assert secret not in pre["command"]
         assert secret not in post["command"]

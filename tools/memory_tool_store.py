@@ -17,7 +17,11 @@ logger = logging.getLogger("tools.memory_tool")
 # Block header prefixes rendered by _render_block; agent/conversation_compression.py
 # matches them to detect a leftover block for an emptied target — keep in lockstep.
 MEMORY_BLOCK_HEADERS = {
-    "memory": "MEMORY (your personal notes)", "user": "USER PROFILE (who the user is)"}
+    "memory": "MEMORY (your personal notes)", "user": "USER PROFILE (who the user is)",
+    "project": "PROJECT MEMORY (facts scoped to this repo)"}
+
+# Linked project memory (fork): cap on dependency repos recalled read-only.
+MAX_LINKED_PROJECTS = 5
 
 ENTRY_DELIMITER = "\n§\n"
 
@@ -83,6 +87,10 @@ class MemoryStore:
         self.project_entries: List[str] = []
         self.project_char_limit = project_char_limit
         self._project_root = None  # frozen at load_from_disk()
+        # Linked project memory (fork v2): read-only recall of dependency
+        # repos' project memory. [(dep_name, dep_root)] + their entries.
+        self._linked_projects: List[Tuple[str, Path]] = []
+        self._linked_entries: List[Tuple[str, List[str]]] = []
         self.memory_char_limit, self.user_char_limit = memory_char_limit, user_char_limit
         self.memory_enabled, self.user_profile_enabled = memory_enabled, user_profile_enabled
         self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": "", "project": "", "linked_projects": ""}
@@ -112,9 +120,18 @@ class MemoryStore:
 
     def _path_for_target(self, target: str) -> Path:
         """Instance-aware path lookup covering all three targets."""
-        if target == "project":
-            return self._path_for_project()
-        return MemoryStore._path_for(target)
+        return self._path_for(target)
+
+    def _path_for_project(self) -> Path:
+        """File path for the project store; requires a resolved project root."""
+        if self._project_root is None:
+            raise RuntimeError(
+                "No project root for this session — the 'project' target is "
+                "unavailable. Use target='memory' for global notes instead."
+            )
+        from tools.memory_tool_project import project_slug
+        from tools import memory_tool
+        return memory_tool.get_memory_dir() / "projects" / f"{project_slug(str(self._project_root))}.md"
 
 
     def _resolve_linked_projects(self, mem_dir: Path) -> List[Tuple[str, Path]]:
@@ -131,6 +148,9 @@ class MemoryStore:
         """
         if self._project_root is None:
             return []
+        from tools.memory_tool_project import (
+            _package_name_for_root, _project_dependency_names, _project_slug)
+        from tools.memory_tool import get_builtin_memory_config
         proj_dir = mem_dir / "projects"
         try:
             if not any(proj_dir.glob("*.md")):
@@ -236,9 +256,12 @@ class MemoryStore:
                     f"Removed from system prompt; use memory(action=remove) to delete the original.]")
 
         # Project store (fork): freeze the project root here (same
-        # frozen-at-load lifecycle as the prompt snapshot).
-        from tools.memory_tool_project import resolve_project_root
-        self._project_root = resolve_project_root()
+        # frozen-at-load lifecycle as the prompt snapshot). The seam lives on
+        # tools.memory_tool (re-exported from memory_tool_project) so tests
+        # can pin the session root; the real resolution uses the agent's
+        # logical cwd (session override → TERMINAL_CWD → os.getcwd()).
+        from tools import memory_tool as _memory_tool
+        self._project_root = _memory_tool._project_root_for_session()
 
         targets = ("memory", "user", "project")
         for target in targets:
@@ -254,19 +277,22 @@ class MemoryStore:
             self._system_prompt_snapshot[target] = self._render_block(target, [_sanitize(e, path.name) for e in entries])
 
         # Linked project memory (fork v2): read-only snapshot from dependency repos.
+        self._linked_projects = []
+        self._linked_entries = []
         linked_snapshot = ""
         if self._project_root is not None:
             try:
-                linked = self._resolve_linked_projects(self._path_for("memory").parent)
-                sections = []
-                for dep, root_path in linked:
-                    block = self._render_block("project", self._read_file(
-                        self._path_for("memory").parent / "projects" / f"{_linked_slug(root_path)}.md"))
-                    if block:
-                        sections.append(f"LINKED PROJECT MEMORY — {dep} ({root_path.name})\n{block}")
-                linked_snapshot = "\n\n".join(sections)
+                mem_dir = self._path_for("memory").parent
+                self._linked_projects = self._resolve_linked_projects(mem_dir)
+                for dep_name, dep_root in self._linked_projects:
+                    entries = self._read_file(
+                        mem_dir / "projects" / f"{self._linked_slug_for(dep_root)}.md")
+                    if entries:
+                        self._linked_entries.append((dep_name, entries))
+                parts = [self._render_block("project", entries) for _, entries in self._linked_entries]
+                linked_snapshot = self._render_linked_block(parts)
             except Exception:
-                linked_snapshot = ""
+                self._linked_projects, self._linked_entries, linked_snapshot = [], [], ""
         self._system_prompt_snapshot["linked_projects"] = linked_snapshot
 
     @staticmethod
@@ -295,12 +321,12 @@ class MemoryStore:
                 with suppress(OSError):
                     _flock(True)
 
-    @staticmethod
-    def _path_for(target: str) -> Path:
+    def _path_for(self, target: str) -> Path:
         from tools import memory_tool  # get_memory_dir is monkeypatched there
         if target == "project":
-            from tools.memory_tool_project import project_file_for_root
-            return project_file_for_root(memory_tool.get_memory_dir(), self._project_root)
+            # Project files are keyed by the session's frozen project root;
+            # resolution + no-root guard live in _path_for_project.
+            return self._path_for_project()
         return memory_tool.get_memory_dir() / ("USER.md" if target == "user" else "MEMORY.md")
 
     def _entries_for(self, target: str) -> List[str]:
@@ -341,6 +367,8 @@ class MemoryStore:
         file) and, unless *skip_drift*, on external drift (flushing would discard
         un-roundtrippable content). Drift check and parse use the SAME raw snapshot —
         a failed second read used to count as "no drift"."""
+        if target == "project" and self._project_root is None:
+            return self._no_project_error()
         path = self._path_for(target)
         with self._file_lock(path):
             raw, read_ok = self._read_raw_checked(path)
@@ -510,6 +538,8 @@ class MemoryStore:
         default_header = "PROJECT MEMORY" if target == "project" else (
             "USER PROFILE (who the user is)" if target == "user" else "MEMORY (your personal notes)")
         title = MEMORY_BLOCK_HEADERS.get(target, default_header)
+        if target == "project" and self._project_root is not None:
+            title = f"{title} — {self._project_root}"
         return f"{sep}\n{title} [{self._usage_pct(target, len(content))}]\n{sep}\n{content}"
 
     @staticmethod

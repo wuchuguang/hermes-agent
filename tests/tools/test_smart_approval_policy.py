@@ -1,49 +1,42 @@
-"""Tests for the operator-customizable smart-approval policy.
+"""Tests for the operator-customizable smart-approval policy (jev guardian).
 
-``approvals.smart_policy`` (config.yaml) lets operators append their own
-rules to the smart-approval guardian's system prompt.  Security invariants
-under test:
+``approvals.smart_policy`` (config.yaml) holds operator DENY rules. jev
+evaluates each line as a case-insensitive regex against the stripped command;
+a match denies outright. Security invariants under test:
 
-  1. Empty/missing policy leaves the prompts exactly as they were.
-  2. A non-empty policy appears in the SYSTEM message sent to call_llm
-     (the trusted channel), under a clearly delimited section.
-  3. The policy text NEVER appears in the user message — the user message
-     carries the untrusted command text, and mixing trusted operator rules
-     into that channel would dilute the guard's trust boundary.
+  1. Empty/missing policy denies nothing on its own.
+  2. A policy line matching the command DENIES — even when jev's own layers
+     would approve (operator rules are the strictest channel).
+  3. A bad operator regex degrades to a no-op instead of crashing the guard.
 
-Inspired by ChatGPT Work's customizable auto-review guardian policy.
+The policy lives in config.yaml (a TRUSTED channel), never travels with the
+untrusted command text.
 """
 
-import unittest
-from unittest.mock import MagicMock, patch
+import sys
+from pathlib import Path
+from unittest.mock import patch
 
+import pytest
+
+from tools import approval_smart
 from tools.approval_smart import _get_smart_policy, _smart_approve
 
 POLICY_TEXT = "Always ESCALATE commands that modify anything under /etc."
 
 
-def _make_response(answer: str):
-    """Build a mock LLM response with the given one-word answer."""
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = answer
-    return mock_response
+@pytest.fixture()
+def typesafe_low(monkeypatch):
+    """TypeSafe says 'safe' so tests observe the POLICY layer in isolation."""
+    monkeypatch.setattr(approval_smart, "_typesafe_destructive_probability", lambda cmd: 0.01)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
 
 
-def _messages_from(mock_call_llm):
-    """Extract the messages list passed to call_llm."""
-    call_args = mock_call_llm.call_args
-    return call_args.kwargs.get("messages") or call_args[1].get("messages", [])
-
-
-class TestGetSmartPolicy(unittest.TestCase):
-    """Unit tests for the config reader."""
-
+class TestGetSmartPolicy:
     @patch("tools.approval_context._get_approval_config")
     def test_missing_key_returns_empty(self, mock_cfg):
         mock_cfg.return_value = {"mode": "smart"}
         assert _get_smart_policy() == ""
-
 
     @patch("tools.approval_context._get_approval_config")
     def test_policy_text_is_stripped(self, mock_cfg):
@@ -51,104 +44,40 @@ class TestGetSmartPolicy(unittest.TestCase):
         assert _get_smart_policy() == POLICY_TEXT
 
 
-class TestSmartApprovePolicyInjection(unittest.TestCase):
-    """Verify how the operator policy is (and is not) wired into the prompts.
+class TestSmartApprovePolicy:
+    """The operator policy is the FIRST gate — strictest channel wins."""
 
-    Follows the mocking pattern of test_smart_approval_injection.py:
-    ``call_llm`` is patched at its source module (``agent.auxiliary_client``)
-    because _smart_approve imports it lazily inside the function.  The
-    config read is isolated by patching ``tools.approval_context._get_approval_config``
-    so tests never touch a real config.yaml.
-    """
+    def test_empty_policy_denies_nothing(self, typesafe_low, monkeypatch):
+        monkeypatch.setattr(approval_smart, "_get_smart_policy", lambda: "")
+        # /etc modification + no policy → falls to signals/typesafe → approve
+        assert _smart_approve("touch /etc/nginx/x.conf", "config edit") == "approve"
 
-    @patch("tools.approval_context._get_approval_config")
-    @patch("agent.auxiliary_client.call_llm")
-    def test_empty_policy_leaves_prompts_unchanged(self, mock_call_llm, mock_cfg):
-        """With no policy configured, prompts must be byte-identical to the
-        prompts produced when the key is present but empty."""
-        mock_call_llm.return_value = _make_response("ESCALATE")
+    def test_policy_line_matching_command_denies(self, typesafe_low, monkeypatch):
+        # Policy lines are REGEXES — the shipped POLICY_TEXT is prose, so use
+        # a regex line the way a real operator would write it.
+        monkeypatch.setattr(approval_smart, "_get_smart_policy", lambda: r"touch\s+/etc/")
+        assert _smart_approve("touch /etc/nginx/x.conf", "config edit") == "deny"
 
-        mock_cfg.return_value = {}  # key missing entirely
-        _smart_approve("rm -rf /tmp/x", "recursive delete")
-        messages_missing = _messages_from(mock_call_llm)
+    def test_policy_case_insensitive(self, typesafe_low, monkeypatch):
+        monkeypatch.setattr(approval_smart, "_get_smart_policy", lambda: "rm\\s+-rf\\s+/srv")
+        assert _smart_approve("RM -RF /srv/data", "recursive delete") == "deny"
 
-        mock_cfg.return_value = {"smart_policy": ""}  # key present, empty
-        _smart_approve("rm -rf /tmp/x", "recursive delete")
-        messages_empty = _messages_from(mock_call_llm)
-
-        assert messages_missing == messages_empty
-        sys_content = messages_missing[0]["content"]
-        assert "Additional policy rules from the operator" not in sys_content
-
-
-    @patch("tools.approval_context._get_approval_config")
-    @patch("agent.auxiliary_client.call_llm")
-    def test_policy_never_in_user_message(self, mock_call_llm, mock_cfg):
-        """The policy is trusted; the user message carries untrusted command
-        text.  They must never share a channel."""
-        mock_call_llm.return_value = _make_response("ESCALATE")
-        mock_cfg.return_value = {"smart_policy": POLICY_TEXT}
-
-        _smart_approve("rm -rf /etc/nginx", "recursive delete")
-
-        messages = _messages_from(mock_call_llm)
-        assert messages[1]["role"] == "user"
-        user_content = messages[1]["content"]
-        assert POLICY_TEXT not in user_content
-        assert "Additional policy rules from the operator" not in user_content
-        # The command itself must still be there, XML-fenced
-        assert "rm -rf /etc/nginx" in user_content
-        assert "<command>" in user_content
-
-    @patch("tools.approval_context._get_approval_config")
-    @patch("agent.auxiliary_client.call_llm")
-    def test_config_read_failure_does_not_break_approval(self, mock_call_llm, mock_cfg):
-        """If the config reader itself blows up, _smart_approve fails safe."""
-        mock_call_llm.return_value = _make_response("APPROVE")
-        mock_cfg.side_effect = RuntimeError("config unreadable")
-        # _smart_approve's outer try/except catches this and escalates
-        assert _smart_approve("echo hi", "flagged") == "escalate"
-
-
-    @patch("agent.auxiliary_client._get_task_timeout")
-    @patch("tools.approval_context._get_approval_config")
-    @patch("agent.auxiliary_client.call_llm")
-    def test_smart_approve_passes_explicit_timeout(
-        self, mock_call_llm, mock_cfg, mock_task_timeout
-    ):
-        """Regression for #82846: the guardian call must pass an explicit
-        timeout instead of relying on the default resolution inside call_llm
-        (a defeated internal timeout silently froze agent turns in
-        production). The explicit value must equal what
-        auxiliary.approval.timeout resolves to."""
-        mock_call_llm.return_value = _make_response("APPROVE")
-        mock_cfg.return_value = {"mode": "smart"}
-        mock_task_timeout.return_value = 42.0
-
+    def test_policy_non_matching_line_ignored(self, typesafe_low, monkeypatch):
+        monkeypatch.setattr(approval_smart, "_get_smart_policy", lambda: "apt-get\\s+install")
         assert _smart_approve("echo hi", "flagged") == "approve"
-        _, kwargs = mock_call_llm.call_args
-        assert kwargs.get("timeout") == 42.0
 
+    def test_bad_operator_regex_degrades_to_noop(self, typesafe_low, monkeypatch):
+        monkeypatch.setattr(approval_smart, "_get_smart_policy", lambda: "[unclosed(")
+        assert _smart_approve("echo hi", "flagged") == "approve"
 
-    @patch("tools.approval_context._get_approval_config")
-    @patch("agent.auxiliary_client.call_llm")
-    def test_smart_approve_failure_logs_warning_and_escalates(
-        self, mock_call_llm, mock_cfg
-    ):
-        """A failed/blocked guardian call must surface as a WARNING with the
-        elapsed time (not a silent DEBUG) — #82846's hang was invisible
-        precisely because nothing logged at the failure point."""
-        mock_call_llm.side_effect = TimeoutError("stalled provider")
-        mock_cfg.return_value = {"mode": "smart"}
+    def test_policy_beats_typesafe_approve(self, typesafe_low, monkeypatch):
+        # Even with TypeSafe saying 1% destructive, operator policy wins.
+        monkeypatch.setattr(approval_smart, "_get_smart_policy", lambda: "/etc/")
+        assert _smart_approve("rm -rf /etc/old", "recursive delete") == "deny"
 
-        with patch("tools.approval_smart.logger") as mock_logger:
-            assert _smart_approve("echo hi", "flagged") == "escalate"
+    def test_config_reader_crash_fails_safe(self, monkeypatch):
+        def boom():
+            raise RuntimeError("config unreadable")
 
-        assert mock_logger.warning.called
-        args, _ = mock_logger.warning.call_args
-        assert "Smart approvals: LLM call failed" in args[0]
-        assert "TimeoutError" in str(args)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        monkeypatch.setattr(approval_smart, "_get_smart_policy", boom)
+        assert _smart_approve("echo hi", "flagged") == "escalate"

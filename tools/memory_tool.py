@@ -42,7 +42,14 @@ def get_memory_dir() -> Path:
 
 
 from tools.memory_tool_store import (  # noqa: E402,F401  (re-exports)
-    ENTRY_DELIMITER, MEMORY_BLOCK_HEADERS, MemoryStore, _scan_memory_content)
+    ENTRY_DELIMITER, MAX_LINKED_PROJECTS, MEMORY_BLOCK_HEADERS, MemoryStore,
+    _scan_memory_content)
+
+# Fork project-memory support (portable module + re-exports for tests that
+# monkeypatch ``tools.memory_tool._project_root_for_session``).
+from tools.memory_tool_project import (  # noqa: E402,F401
+    NO_PROJECT_ERROR, _project_dependency_names, _project_root_for_session,
+    _project_slug, project_file_for_root, project_slug, resolve_project_root)
 
 
 def load_on_disk_store() -> "MemoryStore":
