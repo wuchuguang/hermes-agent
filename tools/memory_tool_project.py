@@ -6,6 +6,12 @@ linked-project blocks resolved from dependency package names. The upstream
 ``tools/memory_tool_store.MemoryStore`` delegates its ``project`` target here.
 """
 
+import hashlib
+import json
+import re
+from pathlib import Path
+from typing import List, Optional
+
 
 def _project_slug(project_root: Path) -> str:
     """Deterministic filesystem-safe slug for a project root.
@@ -208,26 +214,24 @@ def project_file_for_root(mem_dir, root):
     """memories/projects/<sha1-8>-<tail>.md for the frozen project root."""
     if root is None:
         raise ValueError("no project root")
-    from pathlib import Path as _P
-    return _P(mem_dir) / "projects" / (project_slug(str(root)) + ".md")
+    return Path(mem_dir) / "projects" / (project_slug(str(root)) + ".md")
 
 
 def resolve_project_root():
     """Walk up from the agent cwd to the nearest .git / manifest root.
     Ported from the pre-0.21.2 fork memory_tool (frozen at load_from_disk)."""
-    from pathlib import Path as _P
     try:
         from agent.runtime_cwd import resolve_agent_cwd
-        start = _P(resolve_agent_cwd())
+        start = Path(resolve_agent_cwd())
     except Exception:
-        start = _P.cwd()
+        start = Path.cwd()
     try:
         start = start.resolve()
     except OSError:
         return None
-    home = _P.home()
+    home = Path.home()
 
-    def _is_install_tree_safe(path: _P) -> bool:
+    def _is_install_tree_safe(path: Path) -> bool:
         try:
             from agent.runtime_cwd import _is_install_tree
             return _is_install_tree(path)
@@ -243,7 +247,7 @@ def resolve_project_root():
             primary = project.primary_path or next(
                 (f.path for f in project.folders if f.is_primary), None)
             if primary:
-                return _P(primary)
+                return Path(primary)
     except Exception:
         pass
 
