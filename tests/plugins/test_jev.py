@@ -135,6 +135,80 @@ class TestLLMAdvisory:
         assert jev.llm_advisory("bash", {"command": "rm /srv/app/tmp.dump"}) is None
 
 
+class TestLayaBrowserAdvisory:
+    """Laya sidecar 层: 存在则先答, 不存在/低置信静默落回 TypeSafe。
+
+    合同: sidecar 挂了绝不能改变 llm_advisory 的 fail-open 行为。
+    """
+
+    def test_sidecar_down_falls_through_to_typesafe(self, jev, monkeypatch):
+        monkeypatch.setattr(jev, "_cfg", lambda: {"enabled": True, "llm_advisory": True})
+        monkeypatch.setattr(jev, "_laya_browser_advisory", lambda cmd, tool: None)
+        monkeypatch.setattr(jev, "_ask_typesafe", lambda cmd, tool, timeout=6.0: 0.9)
+        out = jev.llm_advisory("browser_exec", {"code": "js delete all rows from the cart table"})
+        assert out is not None and "TypeSafe" in out
+
+    def test_sidecar_down_and_typesafe_down_stays_silent(self, jev, monkeypatch):
+        monkeypatch.setattr(jev, "_cfg", lambda: {"enabled": True, "llm_advisory": True})
+        monkeypatch.setattr(jev, "_laya_browser_advisory", lambda cmd, tool: None)
+        monkeypatch.setattr(jev, "_ask_typesafe", lambda cmd, tool, timeout=6.0: None)
+        assert jev.llm_advisory("browser_exec", {"code": "js delete all rows from the cart table"}) is None
+
+    def test_laya_confident_allow_skips_typesafe(self, jev, monkeypatch):
+        monkeypatch.setattr(jev, "_cfg", lambda: {"enabled": True, "llm_advisory": True})
+
+        def no_typesafe(cmd, tool, timeout=6.0):
+            raise AssertionError("TypeSafe must not be called when Laya confidently allows")
+
+        monkeypatch.setattr(jev, "_ask_typesafe", no_typesafe)
+        monkeypatch.setattr(jev, "_laya_browser_advisory", lambda cmd, tool: "")
+        assert jev.llm_advisory("browser_cdp", {"method": "Network.clearBrowserCookies"}) is None
+
+    def test_laya_advisory_message_rides_through(self, jev, monkeypatch):
+        monkeypatch.setattr(jev, "_cfg", lambda: {"enabled": True, "llm_advisory": True})
+        monkeypatch.setattr(jev, "_laya_browser_advisory", lambda cmd, tool: "⚠️ laya(本地, p=63%)提示：x")
+        monkeypatch.setattr(jev, "_ask_typesafe", lambda cmd, tool, timeout=6.0: 0.0)
+        out = jev.llm_advisory("browser_exec", {"code": "js delete all rows from the cart table"})
+        assert out is not None and "laya" in out
+
+    def test_non_browser_tools_ignore_laya(self, jev, monkeypatch):
+        monkeypatch.setattr(jev, "_cfg", lambda: {"enabled": True, "llm_advisory": True})
+        called = []
+
+        def spy(cmd, tool):
+            called.append(tool)
+            return None
+
+        monkeypatch.setattr(jev, "_laya_browser_advisory", spy)
+        monkeypatch.setattr(jev, "_ask_typesafe", lambda cmd, tool, timeout=6.0: 0.9)
+        out = jev.llm_advisory("bash", {"command": "rm /srv/app/tmp.dump"})
+        assert out is not None and not called  # shell 域不走 Laya
+
+    def test_low_confidence_laya_answer_ignored_by_contract(self, jev):
+        # _laya_browser_advisory 自身的带宽合同: 低置信返回 None, 不自作主张
+        import json as _json
+        from unittest.mock import patch as _patch
+
+        def fake_urlopen(req, timeout):
+            import io
+
+            class R:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+                def read(self):
+                    return _json.dumps({"answers": {"action": {
+                        "choice": "block", "probabilities": {"block": 0.30}}}}).encode()
+
+            return R()
+
+        with _patch("urllib.request.urlopen", fake_urlopen):
+            assert jev._laya_browser_advisory("anything", "browser_cdp") is None
+
+
 class TestJevDecide:
     def test_six_tuple_structure(self, jev):
         out = jev._jev_decide_handler(task="drop the staging database", context="staging is broken")
