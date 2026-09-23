@@ -1,4 +1,4 @@
-import { botMentionTag } from './data'
+import { botHandle, botMentionTag } from './data'
 import {
   compactGroupChatSyncText,
   GROUP_CHAT_HISTORY_CHARS,

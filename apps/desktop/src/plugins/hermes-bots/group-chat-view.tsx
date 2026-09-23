@@ -413,9 +413,7 @@ function GroupChatSettingsDialog({
       setImage(current)
       setBrief(currentBrief)
       setLeaderKey(currentLeaderKey)
-  const currentHoldDetection = (rooms[group] || {}).holdDetection !== false
-  const [holdDetection, setHoldDetection] = useState(currentHoldDetection)
-  const [compressing, setCompressing] = useState<null | string>(null)
+      setHoldDetection(currentHoldDetection)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, group])
@@ -467,9 +465,10 @@ function GroupChatSettingsDialog({
 
     if (leaderKey !== currentLeaderKey) {
       setGroupChatLeader(finalName, leaderKey)
-  const currentHoldDetection = (rooms[group] || {}).holdDetection !== false
-  const [holdDetection, setHoldDetection] = useState(currentHoldDetection)
-  const [compressing, setCompressing] = useState<null | string>(null)
+    }
+
+    if (holdDetection !== currentHoldDetection) {
+      setGroupChatHoldDetection(finalName, holdDetection)
     }
 
     onClose()
@@ -547,6 +546,14 @@ function GroupChatSettingsDialog({
               })}
             </div>
           </div>
+        ) : null}
+        <label className="flex items-center justify-between gap-3 text-sm">
+          <span>
+            <span className="block">{b.group.holdDetection}</span>
+            <span className="block text-xs text-(--ui-text-tertiary)">{b.group.holdDetectionHint}</span>
+          </span>
+          <Switch checked={holdDetection} onCheckedChange={setHoldDetection} />
+        </label>
         {(members || []).length > 0 ? (
           <ul className="flex flex-col gap-1" data-testid="group-settings-members">
             {(members || []).map(member => {
