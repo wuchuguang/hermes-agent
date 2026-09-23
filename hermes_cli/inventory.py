@@ -51,6 +51,17 @@ def load_picker_context() -> ConfigContext:
         current_base_url = str(model_cfg.get("base_url", "") or "")
     else:  # config.model can be a bare string in older configs
         current_model, current_provider, current_base_url = (str(model_cfg) if model_cfg else ""), "", ""
+    # Canonicalize registered aliases ("glm"/"zhipu" → "zai"): pickers compare the stored id
+    # against catalog row slugs, and an alias id never matches — the row shows unselected and
+    # switching looks broken even though the backend resolves the alias fine.
+    try:
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(current_provider)
+        if profile:
+            current_provider = profile.name
+    except Exception:
+        pass
     excluded = cfg.get("model_catalog", {}).get("excluded_providers") or []
     return ConfigContext(
         current_provider=current_provider, current_model=current_model, current_base_url=current_base_url,
