@@ -39,7 +39,6 @@ vi.mock('./data', () => ({
   noteBotAttention: noteBotAttentionMock
 }))
 
-
 const RELAY_PUSH_DEBOUNCE_MS = 250
 
 const route = (id: string): ProfileRoute => ({
@@ -127,12 +126,13 @@ describe('drain loop → relay turn store', () => {
 
       // Only ONE sender holds the envelope — both connections returning it
       // would deliver the same turn twice (the second reopen resets phase).
-      return call.method === 'bot_relay.outbox.drain' && call.connectionId === 'a'
-        ? { envelopes: [envelope()] }
-        : {}
+      return call.method === 'bot_relay.outbox.drain' && call.connectionId === 'a' ? { envelopes: [envelope()] } : {}
     })
 
-    const { relay: { startBotRelay, stopBotRelay }, $relayTurns } = await loadRelay()
+    const {
+      relay: { startBotRelay, stopBotRelay },
+      $relayTurns
+    } = await loadRelay()
 
     startBotRelay()
     await vi.advanceTimersByTimeAsync(0)
@@ -169,7 +169,10 @@ describe('drain loop → relay turn store', () => {
       return call.method === 'bot_relay.outbox.drain' ? { envelopes: [envelope()] } : {}
     })
 
-    const { relay: { startBotRelay, stopBotRelay }, $relayTurns } = await loadRelay()
+    const {
+      relay: { startBotRelay, stopBotRelay },
+      $relayTurns
+    } = await loadRelay()
 
     startBotRelay()
     await vi.advanceTimersByTimeAsync(0)
@@ -183,9 +186,14 @@ describe('drain loop → relay turn store', () => {
   })
 
   it('an envelope with no reachable target never opens a turn', async () => {
-    respondWith(call => (call.method === 'bot_relay.outbox.drain' ? { envelopes: [envelope({ target_connection: 'ghost' })] } : {}))
+    respondWith(call =>
+      call.method === 'bot_relay.outbox.drain' ? { envelopes: [envelope({ target_connection: 'ghost' })] } : {}
+    )
 
-    const { relay: { startBotRelay, stopBotRelay }, $relayTurns } = await loadRelay()
+    const {
+      relay: { startBotRelay, stopBotRelay },
+      $relayTurns
+    } = await loadRelay()
 
     startBotRelay()
     await vi.advanceTimersByTimeAsync(0)

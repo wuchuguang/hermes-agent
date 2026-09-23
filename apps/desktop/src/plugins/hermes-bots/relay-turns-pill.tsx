@@ -9,14 +9,7 @@
  * phase, elapsed time, and an X to dismiss a lingering entry.
  */
 
-import {
-  Codicon,
-  GlyphSpinner,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  useValue
-} from '@hermes/plugin-sdk'
+import { Codicon, GlyphSpinner, Popover, PopoverContent, PopoverTrigger, useValue } from '@hermes/plugin-sdk'
 import { useState } from 'react'
 
 import { useBots } from './i18n'
@@ -35,11 +28,7 @@ function RelayTurnRow({ turn }: { turn: RelayTurn }) {
   return (
     <div className="flex items-start gap-2 px-2.5 py-1.5" data-phase={turn.phase} data-slot="relay-turn-row">
       <span className="mt-0.5 shrink-0 text-(--ui-text-secondary)">
-        {icon.spinning ? (
-          <GlyphSpinner className="text-[10px]" />
-        ) : (
-          <Codicon aria-hidden name={icon.name} size={13} />
-        )}
+        {icon.spinning ? <GlyphSpinner className="text-[10px]" /> : <Codicon aria-hidden name={icon.name} size={13} />}
       </span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[0.7rem] font-medium text-(--ui-text-primary)">

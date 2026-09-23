@@ -201,7 +201,11 @@ export function buildGroupChatTurnPrompt({
   // Rolling memory: conclusions from before the retained window, so a long
   // project never starts every turn from amnesia. Present, then delta.
   if (digest) {
-    sections.push('Context from earlier in this project (summary of messages that have scrolled out of the room):', ...digest.split('\n').map(line => `  ${line}`), '')
+    sections.push(
+      'Context from earlier in this project (summary of messages that have scrolled out of the room):',
+      ...digest.split('\n').map(line => `  ${line}`),
+      ''
+    )
   }
 
   sections.push(
@@ -217,4 +221,3 @@ export function buildGroupChatTurnPrompt({
 
   return sections.join('\n')
 }
-

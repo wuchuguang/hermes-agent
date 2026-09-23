@@ -44,16 +44,15 @@ describe('buildGroupDigest', () => {
   })
 
   it('counts multiple turns per speaker', () => {
-    const digest = buildGroupDigest([
-      msg('member', 'dev', 'first', 1),
-      msg('member', 'dev', 'second', 2)
-    ])
+    const digest = buildGroupDigest([msg('member', 'dev', 'first', 1), msg('member', 'dev', 'second', 2)])
 
     expect(digest).toContain('dev: 2 message(s); last: second')
   })
 
   it('caps the digest length', () => {
-    const entries = Array.from({ length: 40 }, (_, i) => msg('user', 'You', `request number ${i} — ${'x'.repeat(100)}`, i))
+    const entries = Array.from({ length: 40 }, (_, i) =>
+      msg('user', 'You', `request number ${i} — ${'x'.repeat(100)}`, i)
+    )
 
     expect(buildGroupDigest(entries).length).toBeLessThanOrEqual(2048)
   })

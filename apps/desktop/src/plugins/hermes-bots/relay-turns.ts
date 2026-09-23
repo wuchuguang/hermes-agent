@@ -128,9 +128,7 @@ function settleTurn(id: string, phase: 'done' | 'failed', reason?: string) {
       ...turn,
       phase,
       finishedAt: Date.now(),
-      ...(reason
-        ? { reason }
-        : {})
+      ...(reason ? { reason } : {})
     }
   })
 

@@ -10,7 +10,6 @@
 import { host, LruCache } from '@hermes/plugin-sdk'
 
 import { botHandle, clearBotAttention, noteBotAttention } from './data'
-import { beginRelayTurn, settleRelayTurnDone, settleRelayTurnFailed } from './relay-turns'
 import type { ProfileRoute, RosterRow } from './types'
 
 // ── cross-connection bot relay ────────────────────────────────────────────

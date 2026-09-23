@@ -48,8 +48,8 @@ import { labeled, ResizableFrame } from './dialog-parts'
 import { GROUP_CHAT_MAX_MEMBERS, mintGroupRoomId, uniqueGroupChatName, updateGroupChat } from './group-chat'
 import type { GroupChatRoom } from './group-chat'
 import { GroupImageControls } from './group-chat-parts'
-import { groupMemberKey } from './group-membership'
 import { setGroupMembership } from './group-chat-view-members'
+import { groupMemberKey } from './group-membership'
 import {
   botGroups,
   durableGroupChatMembers,
@@ -1164,7 +1164,8 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
   const visible: RosterRow[] = filterBots(selectableRoster, allMeta, query)
   const atCap = selected.length >= GROUP_CHAT_MAX_MEMBERS
   // The effective leader: the explicit pick, or the first selected member.
-  const effectiveLeaderKey = leaderKey ?? (selected.length ? groupMemberKey(durableGroupChatMembers([selected[0]])[0]) : null)
+  const effectiveLeaderKey =
+    leaderKey ?? (selected.length ? groupMemberKey(durableGroupChatMembers([selected[0]])[0]) : null)
 
   const placeholder = selected.length
     ? selected.map(bot => displayName(bot, botRosterMeta(bot, allMeta))).join(', ')

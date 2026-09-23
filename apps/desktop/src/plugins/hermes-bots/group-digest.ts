@@ -22,7 +22,9 @@ const USER_ASK_MAX = 160
 /** A user line worth carrying: it asks, assigns, or decides. Kept verbatim
  *  (truncated) because paraphrase loses the assignment. */
 function userAskText(text: string): null | string {
-  const flat = String(text || '').replace(/\s+/g, ' ').trim()
+  const flat = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
 
   if (!flat) {
     return null
