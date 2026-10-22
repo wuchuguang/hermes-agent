@@ -190,19 +190,19 @@ class MemoryStore:
     def __init__(self, memory_char_limit: int = 2200, user_char_limit: int = 1375, *,
                  memory_enabled: bool = True, user_profile_enabled: bool = True,
                  project_char_limit: int = 2000):
-        self.memory_entries: List[str] = []
-        self.user_entries: List[str] = []
+        self.memory_entries: list[str] = []
+        self.user_entries: list[str] = []
         # Project store (fork): per-repo entries in memories/projects/<slug>.md.
-        self.project_entries: List[str] = []
+        self.project_entries: list[str] = []
         self.project_char_limit = project_char_limit
         self._project_root = None  # frozen at load_from_disk()
         # Linked project memory (fork v2): read-only recall of dependency
         # repos' project memory. [(dep_name, dep_root)] + their entries.
-        self._linked_projects: List[Tuple[str, Path]] = []
-        self._linked_entries: List[Tuple[str, List[str]]] = []
+        self._linked_projects: list[tuple[str, Path]] = []
+        self._linked_entries: list[tuple[str, list[str]]] = []
         self.memory_char_limit, self.user_char_limit = memory_char_limit, user_char_limit
         self.memory_enabled, self.user_profile_enabled = memory_enabled, user_profile_enabled
-        self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": "", "project": "", "linked_projects": ""}
+        self._system_prompt_snapshot: dict[str, str] = {"memory": "", "user": "", "project": "", "linked_projects": ""}
         self._consolidation_failures = 0  # per turn; reset by reset_consolidation_failures()
 
     # Per-turn counter of failed at-capacity consolidation attempts; reset at each turn boundary by
@@ -223,7 +223,7 @@ class MemoryStore:
     # _path_for/_entries_for/_char_limit overrides; only root resolution, the
     # no-project guard, and linked-project resolution live here.
 
-    def _no_project_error(self) -> Dict[str, Any]:
+    def _no_project_error(self) -> dict[str, Any]:
         from tools.memory_tool_project import NO_PROJECT_ERROR
         return dict(NO_PROJECT_ERROR)
 
@@ -243,7 +243,7 @@ class MemoryStore:
         return memory_tool.get_memory_dir() / "projects" / f"{project_slug(str(self._project_root))}.md"
 
 
-    def _resolve_linked_projects(self, mem_dir: Path) -> List[Tuple[str, Path]]:
+    def _resolve_linked_projects(self, mem_dir: Path) -> list[tuple[str, Path]]:
         """Map the project's declared deps to local repos with memory files.
 
         Resolution is name-based: scan the project root's parent directory
@@ -269,7 +269,7 @@ class MemoryStore:
         dep_names = set(_project_dependency_names(self._project_root))
         if not dep_names:
             return []
-        roots: List[Path] = []
+        roots: list[Path] = []
         parent = self._project_root.parent
         if parent.is_dir() and parent != self._project_root:
             roots.append(parent)
@@ -283,7 +283,7 @@ class MemoryStore:
                     roots.append(p)
         except Exception:
             pass
-        name_to_root: Dict[str, Path] = {}
+        name_to_root: dict[str, Path] = {}
         for root in roots:
             try:
                 children = sorted(root.iterdir())
@@ -297,7 +297,7 @@ class MemoryStore:
                 pkg_name = _package_name_for_root(child)
                 if pkg_name and pkg_name not in name_to_root:
                     name_to_root[pkg_name] = child
-        linked: List[Tuple[str, Path]] = []
+        linked: list[tuple[str, Path]] = []
         for dep in _project_dependency_names(self._project_root):
             root = name_to_root.get(dep)
             if root is None or root == self._project_root:
@@ -309,7 +309,7 @@ class MemoryStore:
         return linked
 
 
-    def _render_linked_block(self, parts: List[str]) -> str:
+    def _render_linked_block(self, parts: list[str]) -> str:
         """Render the LINKED PROJECT MEMORY block (fork).
 
         Read-only recall of dependency projects' project memory. Explicitly
@@ -332,7 +332,7 @@ class MemoryStore:
         from tools.memory_tool_project import project_slug
         return project_slug(str(root_path))
 
-    def _consolidation_failure(self, response: Dict[str, Any]) -> Dict[str, Any]:
+    def _consolidation_failure(self, response: dict[str, Any]) -> dict[str, Any]:
         """Count a consolidation failure: under the per-turn cap return ``response``
         (it says how to retry); past it a TERMINAL result so the model stops looping.
 
@@ -466,12 +466,12 @@ class MemoryStore:
             return self._path_for_project()
         return memory_tool.get_memory_dir() / ("USER.md" if target == "user" else "MEMORY.md")
 
-    def _entries_for(self, target: str) -> List[str]:
+    def _entries_for(self, target: str) -> list[str]:
         if target == "project":
             return self.project_entries
         return self.user_entries if target == "user" else self.memory_entries
 
-    def _set_entries(self, target: str, entries: List[str]):
+    def _set_entries(self, target: str, entries: list[str]):
         if target == "project":
             self.project_entries = entries
             return

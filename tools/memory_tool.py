@@ -41,13 +41,13 @@ def get_memory_dir() -> Path:
     return get_hermes_home() / "memories"
 
 
-from tools.memory_tool_store import (  # noqa: E402,F401  (re-exports)
+from tools.memory_tool_store import (
     ENTRY_DELIMITER, FAILURE_CLASS, MAX_LINKED_PROJECTS, MEMORY_BLOCK_HEADERS, PATCH_DROP_HINT,
     MemoryStore, _scan_memory_content)
 
 # Fork project-memory support (portable module + re-exports for tests that
 # monkeypatch ``tools.memory_tool._project_root_for_session``).
-from tools.memory_tool_project import (  # noqa: E402,F401
+from tools.memory_tool_project import (
     NO_PROJECT_ERROR, _project_dependency_names, _project_root_for_session,
     _project_slug, project_file_for_root, project_slug, resolve_project_root)
 

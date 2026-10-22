@@ -124,7 +124,7 @@ _CAUTION: list[tuple[str, str]] = [
     (r"(shutdown|reboot|halt)\b", "shutdown/reboot"),
 ]
 
-import re  # noqa: E402 — rule tables
+import re
 
 _IRREVERSIBLE_RE = [(re.compile(pattern, re.IGNORECASE), why) for pattern, why in _IRREVERSIBLE]
 _CAUTION_RE = [(re.compile(pattern, re.IGNORECASE), note) for pattern, note in _CAUTION]
@@ -182,7 +182,7 @@ def _typesafe_destructive_probability(command: str) -> float | None:
         prob = (data.get("answers") or {}).get("destructive") or {}
         value = prob.get("noul")
         return float(value) if isinstance(value, (int, float)) else None
-    except Exception as exc:  # noqa: BLE001 — fail toward the human, never silent approval
+    except Exception as exc:
         logger.warning("jev smart: TypeSafe call failed (%s: %s), escalating",
                        type(exc).__name__, exc)
         return None
@@ -244,7 +244,7 @@ def _smart_approve(command: str, description: str) -> str:
 
         logger.debug("jev smart: L2 approve p=%.2f in %.1fs", prob, elapsed)
         return "approve"
-    except Exception as e:  # noqa: BLE001 — the guardian fails toward the human
+    except Exception as e:
         logger.warning("jev smart: assessment failed after %.1fs (%s: %s), escalating",
                        time.monotonic() - _smart_t0, type(e).__name__, e)
         return "escalate"

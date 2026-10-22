@@ -228,6 +228,11 @@ export type BotsMessages = {
     nameLabel: string
     holdDetection: string
     holdDetectionHint: string
+    // Fork group-project keys (brief / project leader).
+    makeLeader: string
+    briefLabel: string
+    briefPlaceholder: string
+    leaderTag: (name: string) => string
     compressHistory: string
     compressHistoryHint: (member: string) => string
     compressing: (member: string) => string

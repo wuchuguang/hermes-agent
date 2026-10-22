@@ -274,10 +274,16 @@ class TestPipeToShellNameCoverage:
 
     def test_pipe_to_shell_prompts_through_guard_pipeline(self, monkeypatch):
         """End to end through check_all_command_guards: `curl | zsh` must reach the
-        approval callback carrying the pipe description, not just the pattern scan."""
+        approval callback carrying the pipe description, not just the pattern scan.
+        Fork: the guardian is jev, whose L1/L2 may auto-approve this command; force
+        an escalate verdict so the human path (and its description payload) is exercised."""
+        from tools import approval as approval_module
+        from tools import approval_smart
         from tools.approval import check_all_command_guards
         monkeypatch.setenv("HERMES_INTERACTIVE", "1")
         monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
+        monkeypatch.setattr(approval_smart, "_smart_approve", lambda *_: "escalate")
+        monkeypatch.setattr(approval_module, "_YOLO_MODE_FROZEN", False)
         prompts = []
 
         def deny(*args, **kwargs):
