@@ -1,4 +1,4 @@
-import { botHandle, botMentionTag } from './data'
+import { botMentionTag } from './data'
 import {
   compactGroupChatSyncText,
   GROUP_CHAT_HISTORY_CHARS,
@@ -248,7 +248,7 @@ export function buildGroupChatTurnPrompt({
 
   // Project framing: what this room is FOR, and what the viewer's role in it
   // is. A leaderless room keeps the old plain-participant framing.
-  const framing: string[] = [`[Group chat: "${groupName}"] You are @${botHandle(viewer.name, viewer)}.`]
+  const framing: string[] = [`[Group chat: "${groupName}"] You are @${botMentionTag(viewer)}.`]
 
   if (brief) {
     framing.push(`Project goal: ${brief}`)

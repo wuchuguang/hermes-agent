@@ -177,7 +177,6 @@ class TestLayaBrowserAdvisory:
 
         def spy(cmd, tool):
             called.append(tool)
-            return None
 
         monkeypatch.setattr(jev, "_laya_browser_advisory", spy)
         monkeypatch.setattr(jev, "_ask_typesafe", lambda cmd, tool, timeout=6.0: 0.9)

@@ -4,6 +4,14 @@
 > 每次大版本 merge 冲突过多时，以本文件为蓝图在新 release 上重新二开。
 > **约定：每合并一个新自研功能，必须同步更新此文件。**
 
+## v0.23.3 稳定版同步
+
+- 合并官方 `v0.23.3`，保留项目/关联项目记忆、多目录 workspace、jev 守卫、订阅额度等待及 Desktop 群聊定制。
+- 适配 Python 3.14 和锁定的 pnpm 12 构建链；测试通过 `scripts/run_tests.sh` 隔离运行。
+- 采用上游 shell 注释/多行命令解析，审批判定继续走 jev；上游 auxiliary LLM 专用测试改为对应的 jev 行为契约。
+- 移除 upstream 压缩流程重构后已无调用的旧 memory snapshot helpers；项目记忆继续由冻结快照和系统提示注入提供。
+- 修复自动合并后订阅额度等待提示的不可达分支，并增加真实 backoff 调用测试。
+
 ## 快照
 
 - 基准：上游 `upstream/main`

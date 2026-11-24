@@ -2,7 +2,7 @@
 
 import threading
 
-import agent.retry_utils as retry_utils
+from agent import retry_utils
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -260,3 +260,26 @@ def test_parse_reset_wait_far_future_clamps_to_max():
     wait = parse_zai_subscription_reset_wait(err, now=now)
     assert wait is not None
     assert wait <= 24 * 3600.0
+
+
+def test_subscription_wait_is_announced_immediately(monkeypatch):
+    from agent.turn_recovery import compute_error_backoff
+
+    live, buffered = [], []
+    agent = SimpleNamespace(
+        _emit_diagnostic_status=live.append,
+        _buffer_diagnostic_status=buffered.append,
+        _emit_diagnostic_wait=lambda _: None,
+        _client_log_context=lambda: "test",
+    )
+    monkeypatch.setattr(retry_utils, "provider_retry_after_seconds", lambda _: None)
+    monkeypatch.setattr(retry_utils, "zai_subscription_reset_wait", lambda _: 3605.0)
+    monkeypatch.setattr("hermes_cli.anon_auth.on_free_model", lambda *_: False)
+    wait = compute_error_backoff(
+        agent, RuntimeError("quota exhausted"), retry_count=1, max_retries=12,
+        is_rate_limited=True, is_zai_coding_overload=False,
+        base_url="https://api.z.ai", model="glm",
+    )
+    assert wait == 3605.0
+    assert len(live) == 1 and "订阅额度窗口" in live[0]
+    assert not buffered

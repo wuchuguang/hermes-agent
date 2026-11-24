@@ -1,45 +1,31 @@
-"""The smart-approval guardian asks for its verdict with thinking off, unless the operator chose.
+"""The fork's jev guardian does not spend an auxiliary reasoning-model call.
 
-Its budget is 16 tokens for one word. A reasoning model left to think spends the whole budget on
-reasoning and returns nothing: a press reviewer's local Qwen 27B returned 45 empty verdicts out of
-45. With thinking off, the managed llama-server answers ``APPROVE`` in 4 tokens. An operator who
-set ``auxiliary.approval.reasoning_effort`` keeps that setting.
+Approval reasoning settings belong to the upstream LLM guardian. They cannot
+change jev's deterministic rules or its fail-to-human TypeSafe fallback.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from agent import auxiliary_client
-from tools.approval_smart import _smart_approve
-
-LOCAL = "http://127.0.0.1:18434/v1"
-
-
-def _reply(text):
-    return MagicMock(choices=[MagicMock(message=MagicMock(content=text))])
-
-
-def _verdict_wire(task_config):
-    """The request the guardian's verdict call puts on the wire to a local llama-server."""
-    with patch("agent.auxiliary_task_config._get_auxiliary_task_config", return_value=task_config), \
-            patch.object(auxiliary_client, "_get_auxiliary_task_config", return_value=task_config), \
-            patch("agent.auxiliary_client.call_llm", return_value=_reply("APPROVE")) as call_llm:
-        assert _smart_approve("python -c \"print('hi')\"", "script execution via -c flag") == "approve"
-        sent = call_llm.call_args.kwargs
-        return auxiliary_client._build_call_kwargs(
-            provider="custom", model="qwen", messages=sent["messages"], temperature=sent["temperature"],
-            max_tokens=sent["max_tokens"], extra_body=auxiliary_client._get_task_extra_body("approval"),
-            reasoning_config=sent["reasoning_config"], base_url=LOCAL, task="approval")
-
-
-def test_verdict_goes_out_with_thinking_off():
-    assert _verdict_wire({})["reasoning_effort"] == "none"
+from tools import approval_smart
 
 
 @pytest.mark.parametrize("task_config", [
+    {},
     {"reasoning_effort": "high"},
     {"extra_body": {"reasoning": {"enabled": True, "effort": "high"}}},
 ])
-def test_operator_reasoning_setting_wins(task_config):
-    assert _verdict_wire(task_config)["reasoning_effort"] == "high"
+def test_jev_verdict_does_not_call_auxiliary_reasoning_model(monkeypatch, task_config):
+    monkeypatch.delenv("JEV_SMART_DISABLE", raising=False)
+    monkeypatch.setattr(approval_smart, "_get_smart_policy", lambda: "")
+    with (
+        patch("agent.auxiliary_task_config._get_auxiliary_task_config", return_value=task_config),
+        patch("agent.auxiliary_client.call_llm") as call_llm,
+        patch.object(approval_smart, "_typesafe_destructive_probability", return_value=None) as probability,
+    ):
+        assert approval_smart._smart_approve("python -c \"print('hi')\"", "script execution") == "approve"
+        assert approval_smart._smart_approve("rm -rf /", "recursive delete") == "deny"
+        assert approval_smart._smart_approve("git push origin main", "remote write") == "escalate"
+        probability.assert_called_once_with("git push origin main")
+        call_llm.assert_not_called()

@@ -656,7 +656,7 @@ async function harvestGroupRoundMembers(context: GroupRoundMemberContext): Promi
  *  Watermarks are per thread+member (`${thread}::${memberKey}`), so parallel
  *  topics never eat each other's deltas. */
 export async function runGroupChatRounds(group: string, members: GroupMember[], thread: string, failedMembers = new Set<string>()) {
-  if (group.startsWith('canonical:')) {throw new Error('Canonical rooms are driven by the gateway')}
+  if (group.startsWith('canonical:')) {throw new Error('This group chat runs on its gateway')}
 
   const binding = followGroupChat(group, name => {
     group = name
@@ -697,7 +697,9 @@ export async function runGroupChatRounds(group: string, members: GroupMember[], 
         return
       }
 
-      const roomLog = (($groupChats.get()[group] || {}).log || []).filter(
+      const currentRoom = $groupChats.get()[group]
+
+      const roomLog = (currentRoom?.log || []).filter(
         (e: GroupMessage) => groupThreadOf(e) === thread
       )
 
@@ -713,10 +715,10 @@ export async function runGroupChatRounds(group: string, members: GroupMember[], 
       // deletes it once the member is confirmed done/dead) — presence, not
       // value shape, since markers are a bare number pre-thread or
       // {before, thread} post-thread.
-      const strandedNow = ($groupChats.get()[group] || {}).stranded || {}
+      const strandedNow = currentRoom?.stranded || {}
 
       const responders = rotateGroupSpeakers(
-        resolveGroupResponders(roomLog, members, ($groupChats.get()[group] || {}).leaderKey || null),
+        resolveGroupResponders(roomLog, members, currentRoom?.leaderKey),
         round
       ).filter((member: GroupMember) => !Object.prototype.hasOwnProperty.call(strandedNow, groupMemberKey(member)))
 
@@ -893,7 +895,7 @@ export function sendToGroupChat(
   thread?: null | string,
   images?: Attachment[]
 ): null | string {
-  if (group.startsWith('canonical:')) {throw new Error('Canonical rooms are driven by the gateway')}
+  if (group.startsWith('canonical:')) {throw new Error('This group chat runs on its gateway')}
   const trimmed = String(text || '').trim()
 
   if (rejectGroupSlashCommand(trimmed)) {

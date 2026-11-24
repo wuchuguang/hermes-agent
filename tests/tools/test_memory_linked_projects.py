@@ -34,7 +34,7 @@ def linked_env(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     # Keep sibling-scan deterministic: no config roots.
     monkeypatch.setattr(
-        "hermes_cli.config.load_config", lambda: {}, raising=False
+        "hermes_cli.config.load_config", dict, raising=False
     )
     lib = _make_repo(tmp_path, "core-lib")
     app = _make_repo(tmp_path, "center-app", deps={"core-lib": "^1.0.0"})
@@ -55,7 +55,7 @@ def linked_env(tmp_path, monkeypatch):
 
 
 def test_linked_dependency_memory_injected(linked_env):
-    s, app, lib = linked_env
+    s, _app, _lib = linked_env
     block = s.format_for_system_prompt("linked_projects")
     assert block is not None
     assert "core-lib" in block
@@ -64,14 +64,14 @@ def test_linked_dependency_memory_injected(linked_env):
 
 
 def test_own_project_memory_still_separate(linked_env):
-    s, app, lib = linked_env
+    s, _app, _lib = linked_env
     # The app's own store starts empty; linked content must NOT leak into it.
     assert s.project_entries == []
     assert s.format_for_system_prompt("project") is None
 
 
 def test_linked_memory_not_writable_via_store(linked_env):
-    s, app, lib = linked_env
+    s, _app, lib = linked_env
     # Write to own project store; the dependency's file must stay untouched.
     res = s.add("project", "center-app fact")
     assert res["success"] is True
@@ -87,7 +87,7 @@ def test_linked_memory_not_writable_via_store(linked_env):
 def test_no_project_memory_files_no_scan(monkeypatch, tmp_path):
     """When no project memory files exist, linking resolves nothing."""
     monkeypatch.setattr("tools.memory_tool.get_memory_dir", lambda: tmp_path)
-    lib = _make_repo(tmp_path, "core-lib")
+    _make_repo(tmp_path, "core-lib")
     app = _make_repo(tmp_path, "center-app", deps={"core-lib": "^1.0.0"})
     monkeypatch.setattr(
         "tools.memory_tool._project_root_for_session", lambda: app

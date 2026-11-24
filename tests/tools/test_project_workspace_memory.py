@@ -23,7 +23,7 @@ def project_env(tmp_path, monkeypatch):
     monkeypatch.setattr("tools.memory_tool.get_memory_dir", lambda: tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        "hermes_cli.config.load_config", lambda: {}, raising=False
+        "hermes_cli.config.load_config", dict, raising=False
     )
     app = tmp_path / "center-app"
     lib = tmp_path / "core-lib"
@@ -83,7 +83,7 @@ def test_memory_shared_store_across_libs(project_env):
 
 
 def test_no_project_falls_back_to_git_root(project_env):
-    app, lib = project_env
+    app, _lib = project_env
     mp = pytest.MonkeyPatch()
     try:
         mp.setattr("agent.runtime_cwd.resolve_agent_cwd", lambda: app)

@@ -11,12 +11,9 @@ from unittest.mock import patch as mock_patch
 import pytest
 
 import tools.approval as approval_module
-from tools import approval_context, approval_detection
-from tools import approval_smart
+from tools import approval_context, approval_detection, approval_smart
 from tools.approval import approve_session, detect_dangerous_command, detect_hardline_command, is_approved, load_permanent, prompt_dangerous_approval
-from tools.approval_context import _get_approval_mode
-from tools.approval_context import _normalize_approval_mode
-from tools.approval_smart import _smart_approve
+from tools.approval_context import _get_approval_mode, _normalize_approval_mode
 
 
 class TestPackageManagerUninstallApproval:
@@ -58,15 +55,6 @@ class TestApprovalModeParsing:
 
 
 class TestSmartApproval:
-    def test_smart_approval_uses_jev_layers(self, monkeypatch):
-        """Fork: the smart guardian is jev (L1 rules + L2 TypeSafe), not an
-        auxiliary LLM. A benign command with no risk signals auto-approves
-        WITHOUT any network call."""
-        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-        monkeypatch.setattr(approval_smart, "_operator_policy_deny", lambda cmd: None)
-        result = _smart_approve("python -c \"print('hello')\"", "script execution via -c flag")
-        assert result == "approve"
-
     def test_smart_approval_does_not_allowlist_the_pattern_for_session(self, monkeypatch):
         session_key = "test-smart-per-command"
         command = "python -c \"print('hello')\""
@@ -361,7 +349,6 @@ class TestCloudMetadataEndpoint:
 def _clear_session(key):
     """Replace for removed clear_session() — directly clear internal state."""
     approval_module._session_approved.pop(key, None)
-    approval_module._pending.pop(key, None)
 
 
 class TestCredentialExfilAndInvisibleChars:
@@ -1554,7 +1541,6 @@ class TestApprovalTimeoutIsNotConsent:
         mod._gateway_notify_cbs.clear()
         mod._session_approved.clear()
         mod._permanent_approved.clear()
-        mod._pending.clear()
 
         self._saved_env = {
             k: os.environ.get(k)

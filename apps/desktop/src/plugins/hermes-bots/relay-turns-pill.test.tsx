@@ -13,7 +13,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { beginRelayTurn, $relayTurns, endRelayTurn, settleRelayTurnDone, settleRelayTurnFailed } from './relay-turns'
+import { $relayTurns, beginRelayTurn, endRelayTurn, settleRelayTurnDone, settleRelayTurnFailed } from './relay-turns'
 
 vi.mock('@hermes/plugin-sdk', async () => {
   const nanostores = await import('nanostores')

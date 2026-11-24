@@ -994,11 +994,8 @@ describe('turn prompt', () => {
     expect(peer).toMatch(/group chat with @hermes/)
   })
 
-  // #89720: a renamed primary is @bobby to the roster, autocomplete and the
-  // mention resolver; introducing it to itself as @hermes made it treat
-  // `@bobby …` as someone else's message and pass.
-  it('introduces a renamed primary by the same @tag the room resolves', async () => {
-    const { rounds } = await loadRoom()
+  it('introduces a renamed primary by the same mention tag used for its peers', async () => {
+    await loadRoom()
     const { buildGroupChatTurnPrompt } = await import('./group-round-prompt')
 
     const members: GroupMember[] = [
@@ -1013,7 +1010,7 @@ describe('turn prompt', () => {
       viewer: members[0]
     })
 
-    expect(own).toMatch(/You are @bobby,/)
+    expect(own).toMatch(/You are @bobby\./)
 
     const peer = buildGroupChatTurnPrompt({
       deltaLines: [],

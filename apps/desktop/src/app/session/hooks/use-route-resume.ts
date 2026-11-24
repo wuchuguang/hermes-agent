@@ -5,6 +5,9 @@ import { type SessionResumeRequest, setResumeExhaustedSessionId } from '@/store/
 import type { SessionProfileRoute } from '@/store/session-request-router'
 import { markSelectionRestore } from '@/store/session-states'
 
+import { useResumeReattach } from './use-resume-reattach'
+import { MAX_RESUME_RETRIES, type ResumeAttemptOptions, resumeRetryDelayMs } from './use-session-actions/resume-latches'
+
 interface RouteResumeOptions {
   activeSessionId: string | null
   activeSessionIdRef: MutableRefObject<string | null>
@@ -17,7 +20,7 @@ interface RouteResumeOptions {
     sessionId: string,
     focus: boolean,
     ownerRoute?: SessionProfileRoute,
-    options?: { authoritativeSnapshot?: boolean }
+    options?: ResumeAttemptOptions
   ) => Promise<unknown>
   // Stored-session id whose most recent resume failed terminally (set by
   // useSessionActions, mirrored from $resumeFailedSessionId). While this equals
@@ -42,17 +45,8 @@ interface RouteResumeOptions {
 // (gateway RPC reject + REST fallback failure) on a transiently wedged backend —
 // dead provider key, a runaway turn hogging the dispatcher, flaky DNS. Without a
 // retry the loader latches forever. We retry with backoff, capped, so a
-// genuinely dead backend doesn't hot-loop the resume. The budget is generous —
-// a cold bot backend (profile skill load, model-provider probing) can take tens
-// of seconds to claim its sessions, and 30s+ of patient retrying beats throwing
-// the user at a manual Retry button.
-const MAX_RESUME_RETRIES = 12
-const RESUME_RETRY_BASE_MS = 2_000
-const RESUME_RETRY_MAX_MS = 30_000
-
-function resumeRetryDelayMs(attempt: number): number {
-  return Math.min(RESUME_RETRY_MAX_MS, RESUME_RETRY_BASE_MS * 2 ** attempt)
-}
+// genuinely dead backend doesn't hot-loop the resume (MAX_RESUME_RETRIES /
+// resumeRetryDelayMs, shared with useResumeReattach).
 
 // Resume the routed session with the owner route / snapshot mode carried by an
 // explicit resume request for that same session.
@@ -372,4 +366,15 @@ export function useRouteResume({
     routedSessionId,
     selectedStoredSessionIdRef
   ])
+
+  useResumeReattach({
+    activeSessionId,
+    activeSessionIdRef,
+    creatingSessionRef,
+    currentView,
+    gatewayState,
+    resumeSession,
+    routedSessionId,
+    selectedStoredSessionIdRef
+  })
 }

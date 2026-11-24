@@ -116,7 +116,7 @@ function envelope(overrides: Record<string, unknown> = {}) {
 
 describe('drain loop → relay turn store', () => {
   it('a delivered envelope opens a turn and the reply settles it done', async () => {
-    let resolveDeliver!: (value: { reply: string }) => void
+    let resolveDeliver!: (value: { reply: string; delivery_id: string; admission_id: string; status: string }) => void
 
     const calls = respondWith(call => {
       if (call.method === 'bot_relay.deliver') {
@@ -148,7 +148,7 @@ describe('drain loop → relay turn store', () => {
 
     // Settle the deliver turn; the drain continuation (settle → reply RPC)
     // finishes over a few microtask hops.
-    resolveDeliver({ reply: 'all good' })
+    resolveDeliver({ reply: 'all good', delivery_id: 'env-1', admission_id: 'admitted-1', status: 'settled' })
 
     for (let i = 0; i < 6; i += 1) {
       await vi.advanceTimersByTimeAsync(0)

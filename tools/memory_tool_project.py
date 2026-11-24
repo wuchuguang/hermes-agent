@@ -8,9 +8,12 @@ linked-project blocks resolved from dependency package names. The upstream
 
 import hashlib
 import json
+import logging
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _project_slug(project_root: Path) -> str:
@@ -27,7 +30,7 @@ def _project_slug(project_root: Path) -> str:
 
 
 
-def _project_dependency_names(project_root: Optional[Path]) -> List[str]:
+def _project_dependency_names(project_root: Optional[Path]) -> list[str]:
     """Collect declared dependency package names for a project root.
 
     Reads ``package.json`` (dependencies + devDependencies) and Python
@@ -39,20 +42,20 @@ def _project_dependency_names(project_root: Optional[Path]) -> List[str]:
     """
     if project_root is None:
         return []
-    names: List[str] = []
+    names: list[str] = []
     pkg = project_root / "package.json"
     try:
         if pkg.is_file():
-            data = json.loads(pkg.read_text("utf-8"))
+            data = json.loads(pkg.read_text(encoding="utf-8-sig"))
             for key in ("dependencies", "devDependencies", "peerDependencies"):
                 names.extend((data.get(key) or {}).keys())
     except (OSError, ValueError):
-        pass
+        logger.debug("Could not read project dependency manifest %s", pkg, exc_info=True)
     for req_name in ("requirements.txt", "requirements-dev.txt", "dev-requirements.txt"):
         req = project_root / req_name
         try:
             if req.is_file():
-                for line in req.read_text("utf-8").splitlines():
+                for line in req.read_text(encoding="utf-8-sig").splitlines():
                     line = line.strip()
                     if not line or line.startswith(("#", "-")):
                         continue
@@ -61,11 +64,11 @@ def _project_dependency_names(project_root: Optional[Path]) -> List[str]:
                     if name:
                         names.append(name)
         except OSError:
-            pass
+            logger.debug("Could not read project requirements %s", req, exc_info=True)
     py = project_root / "pyproject.toml"
     try:
         if py.is_file():
-            text = py.read_text("utf-8")
+            text = py.read_text(encoding="utf-8-sig")
             in_deps = False
             for line in text.splitlines():
                 s = line.strip()
@@ -79,7 +82,7 @@ def _project_dependency_names(project_root: Optional[Path]) -> List[str]:
                     if m:
                         names.append(m.group(1))
     except OSError:
-        pass
+        logger.debug("Could not read project dependencies %s", py, exc_info=True)
     # de-dup, preserve order
     return list(dict.fromkeys(names))
 
@@ -90,19 +93,19 @@ def _package_name_for_root(root: Path) -> Optional[str]:
     pkg = root / "package.json"
     try:
         if pkg.is_file():
-            name = json.loads(pkg.read_text("utf-8")).get("name")
+            name = json.loads(pkg.read_text(encoding="utf-8-sig")).get("name")
             if isinstance(name, str) and name.strip():
                 return name.strip()
     except (OSError, ValueError):
-        pass
+        logger.debug("Could not read package name from %s", pkg, exc_info=True)
     py = root / "pyproject.toml"
     try:
         if py.is_file():
-            m = re.search(r'(?m)^\s*name\s*=\s*["\']([^"\']+)["\']', py.read_text("utf-8"))
+            m = re.search(r'(?m)^\s*name\s*=\s*["\']([^"\']+)["\']', py.read_text(encoding="utf-8-sig"))
             if m:
                 return m.group(1).strip()
     except OSError:
-        pass
+        logger.debug("Could not read package name from %s", py, exc_info=True)
     return None
 
 
@@ -133,11 +136,12 @@ def _project_root_for_session() -> Optional[Path]:
 
         start = resolve_agent_cwd()
     except Exception:
+        logger.debug("Could not resolve agent cwd for project memory; using process cwd", exc_info=True)
         start = Path.cwd()
     try:
         start = start.resolve()
     except Exception:
-        pass
+        logger.debug("Could not resolve project memory start path %s", start, exc_info=True)
     if not start.is_dir():
         return None
     # Never resolve a project store for the Hermes install tree itself.
@@ -147,16 +151,14 @@ def _project_root_for_session() -> Optional[Path]:
         if _is_install_tree(start):
             return None
     except Exception:
-        pass
+        logger.debug("Could not check project memory start path against install tree", exc_info=True)
+    project_root = _primary_root_for_session(start)
+    if project_root is not None:
+        return project_root
     home = Path.home()
     manifest_root: Optional[Path] = None
     for candidate in (start, *start.parents):
         if (candidate / ".git").exists():
-            # First-class Project wins over the bare git root: sessions in any
-            # member library share the project's primary-folder store.
-            project_root = _primary_root_for_session(start)
-            if project_root is not None:
-                return project_root
             return candidate
         if manifest_root is None and candidate != home and not _is_install_tree_safe(candidate):
             if (candidate / "package.json").is_file() or (candidate / "pyproject.toml").is_file():
@@ -190,6 +192,7 @@ def _primary_root_for_session(start: Path) -> Optional[Path]:
                 return primary_path
         return None
     except Exception:
+        logger.debug("Could not resolve primary project folder for %s", start, exc_info=True)
         return None
 
 
@@ -199,6 +202,7 @@ def _is_install_tree_safe(path: Path) -> bool:
 
         return _is_install_tree(path)
     except Exception:
+        logger.debug("Could not check install tree for %s", path, exc_info=True)
         return False
 
 
@@ -252,6 +256,7 @@ def resolve_project_root():
         from agent.runtime_cwd import resolve_agent_cwd
         start = Path(resolve_agent_cwd())
     except Exception:
+        logger.debug("Could not resolve agent cwd for project root; using process cwd", exc_info=True)
         start = Path.cwd()
     try:
         start = start.resolve()
@@ -264,6 +269,7 @@ def resolve_project_root():
             from agent.runtime_cwd import _is_install_tree
             return _is_install_tree(path)
         except Exception:
+            logger.debug("Could not check install tree for %s", path, exc_info=True)
             return False
 
     # First-class Project (projects.db) primary folder wins when configured.
@@ -277,7 +283,7 @@ def resolve_project_root():
             if primary:
                 return Path(primary)
     except Exception:
-        pass
+        logger.debug("Could not resolve workspace primary folder for %s", start, exc_info=True)
 
     current = start
     while True:

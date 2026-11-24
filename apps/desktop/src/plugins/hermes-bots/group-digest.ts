@@ -36,6 +36,15 @@ interface SpeakerTurns {
   turns: number
 }
 
+function speakerHeadline(text: string, prior?: SpeakerTurns): string {
+  if (text.length <= 200) {
+    return text
+  }
+
+  // Long messages carry substantive work; preserve the first nonempty line.
+  return userAskText(text.split('\n').find(line => line.trim()) || text) || (prior?.last ?? '')
+}
+
 /**
  * Summarize the entries about to leave the retained window into a digest
  * block. Returns a stable, compact string; empty input or no summarizable
@@ -64,26 +73,12 @@ export function buildGroupDigest(entries: GroupMessage[]): string {
 
     const name = String(entry.from?.name || 'bot')
 
-    if (text.length <= 200) {
-      const prior = speakerTurns.get(name)
+    const prior = speakerTurns.get(name)
 
-      speakerTurns.set(name, {
-        last: text,
-        turns: (prior?.turns || 0) + 1
-      })
-    } else {
-      // A long message is substantive work; its FIRST LINE is its headline —
-      // flattened, so the digest stays one line per speaker.
-      const prior = speakerTurns.get(name)
-      const headline = userAskText(text.split('\n').find(line => line.trim()) || text)
-
-      const next: SpeakerTurns = {
-        last: headline || (prior?.last ?? ''),
-        turns: (prior?.turns || 0) + 1
-      }
-
-      speakerTurns.set(name, next)
-    }
+    speakerTurns.set(name, {
+      last: speakerHeadline(text, prior),
+      turns: (prior?.turns || 0) + 1
+    })
   }
 
   if (!speakerTurns.size && !userAsks.length) {

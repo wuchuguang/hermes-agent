@@ -335,12 +335,17 @@ async function relayAgentsOn(
     )
 
     const profiles = Array.isArray(res?.profiles) ? res.profiles : []
+    // This connection's default is @hermes only while it has no real 'hermes' profile.
+    const hermesTaken = profiles.some(profile => profile?.name === 'hermes')
     const label = labels.get(connection.id) || connection.id
 
     const rows = profiles
       .map(profile => ({
         profile: String(profile?.name || ''),
-        handle: botHandle(profile?.name, profile),
+        handle: botHandle(
+          profile?.name,
+          hermesTaken && profile?.name === 'default' ? { ...profile, hermesHandleTaken: true } : profile
+        ),
         connection_id: connection.id,
         connection_label: label,
         title: String(profile?.ui_meta?.['hermes-bots']?.title || profile?.display_name || ''),
@@ -730,6 +735,12 @@ async function deliverRelayEnvelope(
         ...payload
       })
       pending.delete(envelopeId)
+
+      if (payload.error) {
+        settleRelayTurnFailed(envelopeId, payload.reason || payload.error)
+      } else {
+        settleRelayTurnDone(envelopeId)
+      }
     } catch {
       // Sender gateway unreachable — its waiter times out with guidance.
     }
@@ -746,6 +757,14 @@ async function deliverRelayEnvelope(
   // Needs-attention hook (#93091 item 3): a delivered background DM is
   // this bot's "good turn"; a classified delivery failure badges it.
   const attentionKey = `${target.id}::${String(envelope?.target_profile || '')}`
+
+  beginRelayTurn({
+    connectionId: target.id,
+    envelopeId,
+    fromProfile: String(envelope.from_profile || ''),
+    message: String(envelope.message || ''),
+    targetProfile: String(envelope.target_profile || '')
+  })
 
   try {
     const res = await host.requestProfile<RelayDeliverResult>(

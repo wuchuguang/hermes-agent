@@ -238,6 +238,11 @@ def parse_zai_subscription_reset_wait(error: Any, *, now: Optional[datetime] = N
     return max(0.0, min(wait, _ZAI_SUBSCRIPTION_MAX_WAIT_SECONDS))
 
 
+def zai_subscription_reset_wait(error: Any) -> Optional[float]:
+    """Wait only for a confirmed subscription-quota error."""
+    return parse_zai_subscription_reset_wait(error) if is_zai_subscription_quota_error(error=error) else None
+
+
 def zai_subscription_quota_retry_ceiling() -> int:
     """Retry-loop ceiling that leaves room for the reset-and-retry-once wait.
 

@@ -16,7 +16,7 @@ import json
 import subprocess
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from hermes_cli.config import load_config_readonly
 from hermes_cli.providers import determine_api_mode
@@ -43,7 +43,7 @@ _SIMPLE_EXACT = {
 }
 
 
-def _read_router_config() -> Dict[str, Any]:
+def _read_router_config() -> dict[str, Any]:
     cfg = load_config_readonly()
     router = cfg.get("text_runtime_router")
     if isinstance(router, dict):
@@ -63,7 +63,7 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
-def _normalize_runtime_entry(entry: Any) -> Dict[str, str]:
+def _normalize_runtime_entry(entry: Any) -> dict[str, str]:
     if not isinstance(entry, dict):
         return {}
     provider = str(entry.get("provider") or "").strip()
@@ -108,8 +108,7 @@ def _ollama_model_installed(model: str) -> bool:
 
 def _warm_ollama_model(base_url: str, model: str) -> bool:
     endpoint = base_url.rstrip("/")
-    if endpoint.endswith("/v1"):
-        endpoint = endpoint[:-3]
+    endpoint = endpoint.removesuffix("/v1")
     req = urllib.request.Request(
         endpoint + "/api/generate",
         data=json.dumps(
@@ -130,7 +129,7 @@ def _warm_ollama_model(base_url: str, model: str) -> bool:
         return False
 
 
-def ensure_local_text_runtime_ready(runtime: Dict[str, str]) -> bool:
+def ensure_local_text_runtime_ready(runtime: dict[str, str]) -> bool:
     """按需确保本地 Ollama 文本模型已装载。
 
     仅对 ``provider=ollama`` 生效；其它 provider 直接返回 True。
@@ -188,8 +187,8 @@ def _estimate_text_complexity(message: str, *, short_length: int) -> str:
 def decide_text_runtime(
     user_message: str,
     *,
-    current_runtime: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, str]]:
+    current_runtime: Optional[dict[str, Any]] = None,
+) -> Optional[dict[str, str]]:
     """根据当前用户文本决定是否切换本回合主模型运行时。
 
     返回：
