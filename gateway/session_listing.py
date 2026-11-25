@@ -56,11 +56,35 @@ def _decode_cursor(cursor, binding):
     return offset
 
 
-def _excluded_sources():
+def _show_api_server(store) -> bool:
+    """Fork option: list ``api_server`` sessions in the picker (upstream hides them).
+
+    Upstream keeps them out because the API transport restores its own runs. Profiles that
+    host a platform-dispatched agent (one profile per project) need the rows visible in the
+    desktop/CLI picker, so they opt in with ``session_listing.show_api_server: true``.
+    """
+    try:
+        from pathlib import Path
+
+        import yaml
+
+        raw = (Path(store.scope.profile_dir) / 'config.yaml').read_text(encoding='utf-8')
+        cfg = yaml.safe_load(raw) or {}
+    except (OSError, ValueError, AttributeError, TypeError):
+        return False
+    if not isinstance(cfg, dict):
+        return False
+    block = cfg.get('session_listing')
+    return isinstance(block, dict) and block.get('show_api_server') is True
+
+
+def _excluded_sources(store=None):
     """Main's picker listed every source but the internal ones; the API transport has its own restore.
     Plugin platforms are ``Platform`` pseudo-members enum iteration never yields, so the query
     excludes rather than enumerates, and each messaging row is judged by the cold mount's own check."""
     from persistence.conversation.sessions import INTERNAL_LISTING_SOURCES
+    if store is not None and _show_api_server(store):
+        return INTERNAL_LISTING_SOURCES
     return (*INTERNAL_LISTING_SOURCES, 'api_server')
 
 
@@ -122,7 +146,7 @@ def stored_picker_sessions(authority, actor, *, limit, include_hidden=False, wor
     store = authority_persistence(authority)
     own_profile = _own_profile(store)
     rule = owner_rule()
-    listing = SessionQuery(exclude_sources=_excluded_sources(), order=SessionOrder.LAST_ACTIVE,
+    listing = SessionQuery(exclude_sources=_excluded_sources(store), order=SessionOrder.LAST_ACTIVE,
                            include_hidden=include_hidden, workspace_key=workspace, search_text=query)
     sessions, seen, sources, exhausted = [], set(), [], False  # sources: (first row, current segment, listed row)
     while len(sessions) < limit:
