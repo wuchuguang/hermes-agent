@@ -89,7 +89,12 @@ def _excluded_sources(store=None):
 
 
 def _picker_row(row_id, row, tip, sid):
-    return {'id': row_id, 'session_id': sid, 'resolved_id': sid, 'title': row.title or '',
+    """Picker row; API-dispatched sessions get a ``[API]`` prefix so a busy platform cannot
+    bury the human's own sessions (the row's source stays ``api_server``)."""
+    title = row.title or ''
+    if tip.source == 'api_server':
+        title = f'[API] {title}'.rstrip()
+    return {'id': row_id, 'session_id': sid, 'resolved_id': sid, 'title': title,
             'source': tip.source, 'started_at': row.started_at,
             'message_count': row.message_count, 'model': tip.model, 'running': False}
 
