@@ -499,6 +499,10 @@ async def _start_gateway_shutdown_tail(
 
     _best_effort(_stop_keepalive)
 
+    # Stop publishing our run entries before the adapters close.
+    from gateway.session_run_registry import stop_active_run_sync
+    _best_effort(stop_active_run_sync)
+
     # Never join(): an in-flight cron delivery is a coroutine on THIS loop; a sync join would drop it.
     # Stop cron scheduler + housekeeping cleanly. These MUST be awaited cooperatively, not join()ed. A cron
     # delivery in flight when the gateway restarts is a coroutine scheduled onto THIS event loop
@@ -923,6 +927,11 @@ async def _start_gateway_runtime(config: Optional[GatewayConfig] = None, replace
 
         cron_stop, cron_provider, cron_thread, housekeeping_thread = (
             _start_gateway_start_cron_and_housekeeping(runner))
+        # Cross-process run registry: web (studio) sees this gateway's runs and can request cancels.
+        from gateway.session_run_registry import SessionRunSync, set_active_run_sync
+        run_sync = SessionRunSync(runner)
+        run_sync.start()
+        set_active_run_sync(run_sync)
         # From here every exit (a READY publication that raises included) runs the shutdown tail,
         # which stops the cron ticker and housekeeping before the adapters they deliver through close.
         from gateway.run_runtime import publish_gateway_runtime_ready, wait_gateway_runtime
